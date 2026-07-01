@@ -1,0 +1,45 @@
+# Python cache/build output
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+*.egg-info/
+
+# Local Python environments
+.venv/
+venv/
+env/
+ENV/
+
+# Logs and runtime files
+*.log
+*.pid
+*.sock
+/tmp/
+
+# Editor and OS files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+
+# Large/generated ML and media artifacts.
+# vv/ is copied demo/model material and duplicates some camera-control code.
+/vv/
+*.onnx
+*.rknn
+*.npy
+*.mp4
+*.avi
+*.mov
+*.mkv
+*.so
+vv/10_apps_fromLP/rknn_yolov5_demo_v2.3/rknn_yolov5_demo
