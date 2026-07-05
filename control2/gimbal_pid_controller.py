@@ -82,6 +82,36 @@ class GimbalPIDController:
             self._roll_pid.reset()
             self._active_roll = True
 
+    def set_pitch_gains(self, kp, ki, kd):
+        with self._lock:
+            self._pitch_pid.set_gains(kp, ki, kd)
+
+    def set_roll_gains(self, kp, ki, kd):
+        with self._lock:
+            self._roll_pid.set_gains(kp, ki, kd)
+
+    def get_state(self):
+        """Thread-safe snapshot of both axes for a UI/calibration tool."""
+        with self._lock:
+            pkp, pki, pkd = self._pitch_pid.gains
+            rkp, rki, rkd = self._roll_pid.gains
+            return {
+                "pitch": {
+                    "kp": pkp, "ki": pki, "kd": pkd,
+                    "setpoint": self._pitch_setpoint,
+                    "active": self._active_pitch,
+                    "measured": self._measured_pitch,
+                    "min": self._cfg.PITCH_MIN, "max": self._cfg.PITCH_MAX,
+                },
+                "roll": {
+                    "kp": rkp, "ki": rki, "kd": rkd,
+                    "setpoint": self._roll_setpoint,
+                    "active": self._active_roll,
+                    "measured": self._measured_roll,
+                    "min": self._cfg.ROLL_MIN, "max": self._cfg.ROLL_MAX,
+                },
+            }
+
     def stop_pitch(self):
         with self._lock:
             self._active_pitch = False

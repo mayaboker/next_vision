@@ -154,7 +154,8 @@ class ColibriSender:
         
         try:
             data = (json.dumps(cmd) + '\n').encode('utf-8')
-            print(f"data to sendall = {data}")
+            if self.verbose:
+                print(f"data to sendall = {data}")
             self.socket.sendall(data)
             return True
         except Exception as e:

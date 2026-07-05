@@ -26,6 +26,17 @@ class PIDControl:
         self._last_error = 0.0
         self._integral = 0.0
 
+    def set_gains(self, kp, ki, kd):
+        """Update the PID gains live (e.g. from a calibration tool)."""
+        self._kp = kp
+        self._ki = ki
+        self._kd = kd
+
+    @property
+    def gains(self):
+        """Current (kp, ki, kd)."""
+        return self._kp, self._ki, self._kd
+
     def update(self, error, dt):
         """Return the clamped PID output for the given error over dt seconds."""
         self._integral += error * dt

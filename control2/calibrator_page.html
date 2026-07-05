@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>PID Calibrator</title>
+<style>
+  :root {
+    --bg: #0f1420; --panel: #171e2e; --line: #29344a; --fg: #e7ecf5;
+    --muted: #8b97ad; --accent: #4da3ff; --meas: #4da3ff; --sp: #ffb454;
+    --ok: #45c86b; --bad: #ff5d5d;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.4 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+  }
+  header {
+    display: flex; align-items: center; gap: 14px;
+    padding: 12px 18px; border-bottom: 1px solid var(--line);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .status { font-size: 13px; color: var(--muted); }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+         background: var(--bad); margin-right: 6px; vertical-align: middle; }
+  .dot.on { background: var(--ok); }
+  .wrap { display: flex; flex-wrap: wrap; gap: 16px; padding: 16px; }
+  .panel {
+    flex: 1 1 460px; background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 14px 16px;
+  }
+  .panel h2 { margin: 0 0 4px; font-size: 15px; }
+  .panel .sub { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+  canvas { width: 100%; height: 240px; display: block;
+           background: #0c111b; border-radius: 8px; border: 1px solid var(--line); }
+  .legend { display: flex; gap: 16px; font-size: 12px; margin: 8px 2px 12px; color: var(--muted); }
+  .legend span::before {
+    content: ""; display: inline-block; width: 18px; height: 3px;
+    margin-right: 6px; vertical-align: middle; border-radius: 2px;
+  }
+  .legend .m::before { background: var(--meas); }
+  .legend .s::before { background: var(--sp); border-top: 0; }
+  .controls { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 12px; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field label { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  input[type=number] {
+    background: #0c111b; border: 1px solid var(--line); color: var(--fg);
+    border-radius: 6px; padding: 7px 8px; font: inherit; width: 100%;
+  }
+  input:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; gap: 10px; align-items: flex-end; margin-top: 12px; flex-wrap: wrap; }
+  .row .field { flex: 1 1 120px; }
+  button {
+    background: var(--accent); color: #05203f; border: 0; border-radius: 6px;
+    padding: 8px 14px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button.ghost { background: transparent; color: var(--fg); border: 1px solid var(--line); }
+  button:active { transform: translateY(1px); }
+  .readout { font-size: 12px; color: var(--muted); margin-top: 10px; }
+  .readout b { color: var(--fg); font-weight: 600; }
+</style>
+</head>
+<body>
+<header>
+  <h1>PID Calibrator</h1>
+  <div class="status"><span id="connDot" class="dot"></span><span id="connText">connecting…</span></div>
+</header>
+
+<div class="wrap" id="panels"></div>
+
+<template id="panelTpl">
+  <div class="panel">
+    <h2 class="title"></h2>
+    <div class="sub range"></div>
+    <canvas></canvas>
+    <div class="legend"><span class="m">feedback (measured °)</span><span class="s">setpoint °</span></div>
+    <div class="controls">
+      <div class="field"><label>Kp</label><input type="number" step="any" data-k="kp"></div>
+      <div class="field"><label>Ki</label><input type="number" step="any" data-k="ki"></div>
+      <div class="field"><label>Kd</label><input type="number" step="any" data-k="kd"></div>
+    </div>
+    <div class="row">
+      <button class="applyGains">Apply gains</button>
+    </div>
+    <div class="row">
+      <div class="field"><label>Setpoint °</label><input type="number" step="any" data-k="sp"></div>
+      <button class="setSp">Set &amp; hold</button>
+      <button class="ghost stop">Stop</button>
+    </div>
+    <div class="readout"></div>
+  </div>
+</template>
+
+<script>
+const AXES = ["pitch", "roll"];
+const els = {};
+
+function buildPanels() {
+  const tpl = document.getElementById("panelTpl");
+  const host = document.getElementById("panels");
+  for (const axis of AXES) {
+    const node = tpl.content.firstElementChild.cloneNode(true);
+    node.querySelector(".title").textContent = axis[0].toUpperCase() + axis.slice(1);
+    const inputs = {};
+    node.querySelectorAll("input[data-k]").forEach(i => inputs[i.dataset.k] = i);
+    const canvas = node.querySelector("canvas");
+    els[axis] = {
+      inputs,
+      canvas,
+      range: node.querySelector(".range"),
+      readout: node.querySelector(".readout"),
+    };
+    node.querySelector(".applyGains").onclick = () => applyGains(axis);
+    node.querySelector(".setSp").onclick = () => setSetpoint(axis);
+    node.querySelector(".stop").onclick = () => stopAxis(axis);
+    host.appendChild(node);
+  }
+}
+
+async function post(path, body) {
+  try {
+    const r = await fetch(path, {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify(body),
+    });
+    const j = await r.json();
+    if (!j.ok) alert("Error: " + (j.error || "request failed"));
+  } catch (e) { alert("Request failed: " + e); }
+}
+
+function applyGains(axis) {
+  const i = els[axis].inputs;
+  post("/gains", {axis, kp: +i.kp.value, ki: +i.ki.value, kd: +i.kd.value});
+}
+function setSetpoint(axis) {
+  post("/setpoint", {axis, deg: +els[axis].inputs.sp.value});
+}
+function stopAxis(axis) { post("/stop", {axis}); }
+
+// Only overwrite a field the user is not currently editing.
+function setIfIdle(input, value) {
+  if (document.activeElement === input) return;
+  if (input.dataset.dirty === "1") return;
+  input.value = Number(value).toString();
+}
+
+function markDirtyHandlers() {
+  for (const axis of AXES) {
+    for (const k of Object.keys(els[axis].inputs)) {
+      const inp = els[axis].inputs[k];
+      inp.addEventListener("input", () => inp.dataset.dirty = "1");
+      inp.addEventListener("blur", () => inp.dataset.dirty = "0");
+    }
+  }
+}
+
+function drawChart(canvas, series, now, windowSec, yMinHint, yMaxHint) {
+  const ctx = canvas.getContext("2d");
+  const dpr = window.devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  if (canvas.width !== W * dpr || canvas.height !== H * dpr) {
+    canvas.width = W * dpr; canvas.height = H * dpr;
+  }
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const padL = 42, padR = 10, padT = 10, padB = 22;
+  const x0 = padL, x1 = W - padR, y0 = padT, y1 = H - padB;
+  const tMin = now - windowSec, tMax = now;
+
+  // Y range from data (+ setpoint), with sensible padding.
+  let lo = Infinity, hi = -Infinity;
+  for (const p of series) {
+    if (p[1] != null) { lo = Math.min(lo, p[1]); hi = Math.max(hi, p[1]); }
+    if (p[2] != null) { lo = Math.min(lo, p[2]); hi = Math.max(hi, p[2]); }
+  }
+  if (!isFinite(lo)) { lo = yMinHint; hi = yMaxHint; }
+  if (lo === hi) { lo -= 1; hi += 1; }
+  const pad = (hi - lo) * 0.12; lo -= pad; hi += pad;
+
+  const sx = t => x0 + (t - tMin) / (tMax - tMin) * (x1 - x0);
+  const sy = v => y1 - (v - lo) / (hi - lo) * (y1 - y0);
+
+  // grid + y labels
+  ctx.strokeStyle = "#29344a"; ctx.fillStyle = "#8b97ad";
+  ctx.lineWidth = 1; ctx.font = "11px system-ui"; ctx.textAlign = "right"; ctx.textBaseline = "middle";
+  const ticks = 4;
+  for (let i = 0; i <= ticks; i++) {
+    const v = lo + (hi - lo) * i / ticks, y = sy(v);
+    ctx.globalAlpha = 0.5; ctx.beginPath(); ctx.moveTo(x0, y); ctx.lineTo(x1, y); ctx.stroke();
+    ctx.globalAlpha = 1; ctx.fillText(v.toFixed(1), x0 - 6, y);
+  }
+  // x labels (seconds ago)
+  ctx.textAlign = "center"; ctx.textBaseline = "top";
+  for (let s = 0; s <= windowSec; s += Math.max(5, Math.round(windowSec / 6))) {
+    const x = sx(now - s);
+    ctx.fillText("-" + s + "s", x, y1 + 5);
+  }
+
+  function line(idx, color, dashed) {
+    ctx.strokeStyle = color; ctx.lineWidth = 2;
+    ctx.setLineDash(dashed ? [6, 5] : []);
+    ctx.beginPath();
+    let started = false;
+    for (const p of series) {
+      const v = p[idx];
+      if (v == null) { started = false; continue; }
+      const x = sx(p[0]), y = sy(v);
+      if (!started) { ctx.moveTo(x, y); started = true; } else { ctx.lineTo(x, y); }
+    }
+    ctx.stroke(); ctx.setLineDash([]);
+  }
+  line(2, "#ffb454", true);   // setpoint
+  line(1, "#4da3ff", false);  // measured
+}
+
+async function poll() {
+  let data;
+  try {
+    data = await (await fetch("/data")).json();
+  } catch (e) {
+    setConn(false, false); return;
+  }
+  setConn(data.connected, data.receiving);
+  for (const axis of AXES) {
+    const a = data[axis], e = els[axis];
+    setIfIdle(e.inputs.kp, a.kp);
+    setIfIdle(e.inputs.ki, a.ki);
+    setIfIdle(e.inputs.kd, a.kd);
+    if (a.active) setIfIdle(e.inputs.sp, a.setpoint);
+    e.range.textContent = `range ${a.min}…${a.max}°` + (a.active ? "" : "  ·  not engaged");
+    const err = a.active ? (a.setpoint - a.measured) : null;
+    e.readout.innerHTML =
+      `measured <b>${a.measured.toFixed(2)}°</b>` +
+      (a.active ? `   setpoint <b>${a.setpoint.toFixed(2)}°</b>   error <b>${err.toFixed(2)}°</b>`
+                : `   <span>idle</span>`);
+    drawChart(e.canvas, a.series, data.now, data.window, a.min, a.max);
+  }
+}
+
+function setConn(connected, receiving) {
+  const dot = document.getElementById("connDot"), txt = document.getElementById("connText");
+  if (connected && receiving) { dot.classList.add("on"); txt.textContent = "connected · receiving feedback"; }
+  else if (connected) { dot.classList.add("on"); txt.textContent = "connected · no feedback (run 'start')"; }
+  else { dot.classList.remove("on"); txt.textContent = "disconnected"; }
+}
+
+buildPanels();
+markDirtyHandlers();
+poll();
+setInterval(poll, 150);
+</script>
+</body>
+</html>
