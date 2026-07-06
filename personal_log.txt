@@ -4,3 +4,7 @@ pc ip 192.168.1.200/24
 port 5000 for control
 port 5001 for RPT video straming using gstreamer:
 gst-launch-1.0 udpsrc port=5001 caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H265,payload=96" ! rtpjitterbuffer latency=50 ! rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! autovideosink sync=false
+
+adding ip:
+ip link show
+sudo ip route add default via 192.168.1.1 dev eth0 (replace eth0 with the right if)
