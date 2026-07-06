@@ -116,3 +116,27 @@ git branch -M main
 git push -u origin main
 ```
 
+
+##  POC
+on ssh:
+```bash
+python proxy.py /dev/ttyS0 --host 192.168.1.30 --port 5000
+```
+
+on pc:
+```bash
+python control2/pid_calibrator.py --host 192.168.1.30 --port 5000
+```
+
+
+chip ip 192.168.1.30/24 user ubuntu pw ubuntu `sudo su` + `cd /local/10_apps`
+pc ip 192.168.1.200/24
+/dev/ttyS0
+port 5000 for control
+port 5001 for RPT video straming using gstreamer: `./rtsp_cam_receiver.py`
+port 5005 for pixel-to-move stream (--track currently on the pid_controller run and aruco_id0_viewer.py)
+Note that currently the video is rotated-180, so we also rotate the qr center pixel to match.
+
+adding ip:
+ip link show
+`sudo ip route add default via 192.168.1.1 dev eth0` (replace eth0 with the right if)

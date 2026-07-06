@@ -68,18 +68,23 @@ class GimbalPIDController:
     # ------------------------------------------------------------------ #
     # Setpoint commands (from the CLI)
     # ------------------------------------------------------------------ #
-    def set_pitch_deg(self, deg):
+    def set_pitch_deg(self, deg, reset=True):
+        # reset=True on a fresh manual target (clears integral/derivative).
+        # reset=False for continuous outer-loop updates (e.g. ArUco tracking at
+        # frame rate) so the inner PID's integral/derivative are preserved.
         deg = _clamp(deg, self._cfg.PITCH_MIN, self._cfg.PITCH_MAX)
         with self._lock:
             self._pitch_setpoint = deg
-            self._pitch_pid.reset()
+            if reset:
+                self._pitch_pid.reset()
             self._active_pitch = True
 
-    def set_roll_deg(self, deg):
+    def set_roll_deg(self, deg, reset=True):
         deg = _clamp(deg, self._cfg.ROLL_MIN, self._cfg.ROLL_MAX)
         with self._lock:
             self._roll_setpoint = deg
-            self._roll_pid.reset()
+            if reset:
+                self._roll_pid.reset()
             self._active_roll = True
 
     def set_pitch_gains(self, kp, ki, kd):
@@ -162,10 +167,12 @@ class GimbalPIDController:
             roll_out = self._roll_pid.update(roll_error, dt) if active_roll else 0.0
 
         if active_pitch:
-            self._command_event.fire("pitch", self._to_speed(pitch_out, self._cfg.PITCH_SIGN))
+            self._command_event.fire("pitch", self._to_speed(pitch_out, self._cfg.PITCH_SIGN, name="pitch"))
         if active_roll:
             self._command_event.fire("roll", self._to_speed(roll_out, self._cfg.ROLL_SIGN))
 
-    def _to_speed(self, output, sign):
+    def _to_speed(self, output, sign, name=None):
         speed = round(self._cfg.BASELINE + sign * output)
+        if name is not None:
+            print(f"{name} speed: {speed}")
         return int(_clamp(speed, self._cfg.RATE_MIN, self._cfg.RATE_MAX))

@@ -12,14 +12,21 @@ Zero third-party dependencies: stdlib HTTP server + a vanilla-JS canvas page.
 Usage:
     python control2/pid_calibrator.py [--host <ip>] [--port <port>]
                                       [--http-host <ip>] [--http-port <port>]
+                                      [--track | --track-port <udp_port>]
 
 Then open the printed URL (default http://127.0.0.1:8080) in a browser.
 On launch the calibrator auto-starts 25 Hz camera transmission (so rx_status
 feedback flows and rate commands reach the camera) and stops it on exit.
+
+ArUco follow (--track / --track-port): binds a UDP socket and expects pixel-error
+packets {"ex","ey","found","w","h"} from aruco_id0_viewer.py --track. Each packet
+is converted (via live FOV + current gimbal angle) into a target angle that drives
+the tuned angle-hold PID so the camera keeps the marker centered.
 """
 
 import json
 import os
+import socket
 import sys
 import threading
 import time
@@ -36,11 +43,15 @@ for _p in (_HERE, os.path.join(_REPO, "serailcontroler")):
 from sender import ColibriSender  # noqa: E402  (from serailcontroler)
 
 try:  # package import
+    from . import settings as cfg
     from .event_bus import Event
     from .gimbal_pid_controller import GimbalPIDController
+    from .pid import _clamp
 except ImportError:  # script import
+    import settings as cfg
     from event_bus import Event
     from gimbal_pid_controller import GimbalPIDController
+    from pid import _clamp
 
 _PAGE_PATH = os.path.join(_HERE, "calibrator_page.html")
 _WINDOW_SECONDS = 30.0          # rolling plot window
@@ -49,7 +60,7 @@ _FRESH_FEEDBACK_S = 2.0         # feedback considered live if newer than this
 
 
 class PidCalibrator:
-    def __init__(self, host, port):
+    def __init__(self, host, port, track_port=None):
         self.sender = ColibriSender(host, port)
         # Quiet the sender's terminal chatter; the GUI is the display now.
         self.sender.show_tx = False
@@ -69,6 +80,16 @@ class PidCalibrator:
         self._history = deque(maxlen=_BUFFER_MAXLEN)
         self._lock = threading.Lock()
         self._last_feedback_t = None
+
+        # ArUco visual-follow (outer loop) state.
+        self._track_port = track_port
+        self._track_running = False
+        self._track_thread = None
+        self._track_sock = None
+        self._track_lock = threading.Lock()
+        self._track = None            # latest {ex,ey,found,w,h,t}
+        self._last_found_t = 0.0
+        self._engaged = False         # currently driving from a found marker
 
     # ------------------------------------------------------------------ #
     # Wiring
@@ -105,6 +126,17 @@ class PidCalibrator:
         connected = bool(getattr(self.sender, "running", False))
         st["pitch"]["series"] = pitch_series
         st["roll"]["series"] = roll_series
+
+        with self._track_lock:
+            tr = dict(self._track) if self._track else None
+        tracking = {
+            "enabled": self._track_port is not None,
+            "engaged": self._engaged,
+            "found": bool(tr["found"]) if tr else False,
+            "ex": tr["ex"] if tr else None,
+            "ey": tr["ey"] if tr else None,
+            "age": (now - tr["t"]) if tr else None,
+        }
         return {
             "now": now,
             "window": _WINDOW_SECONDS,
@@ -113,6 +145,7 @@ class PidCalibrator:
             "last_feedback_age": (now - last_fb) if last_fb else None,
             "pitch": st["pitch"],
             "roll": st["roll"],
+            "tracking": tracking,
         }
 
     # ------------------------------------------------------------------ #
@@ -143,6 +176,97 @@ class PidCalibrator:
             raise ValueError(f"unknown axis {axis!r}")
 
     # ------------------------------------------------------------------ #
+    # ArUco visual-follow (outer loop)
+    # ------------------------------------------------------------------ #
+    def _compute_targets(self, ex, ey, w, h):
+        """Pixel error -> (pitch_target, roll_target) absolute angles, or None
+        per axis when inside the dead-band. ex=cx-w/2 (horizontal->roll),
+        ey=cy-h/2 (vertical->pitch)."""
+        st = self.controller.get_state()
+        cur_pitch = st["pitch"]["measured"]
+        cur_roll = st["roll"]["measured"]
+
+        status = self.sender.last_status or {}
+        hfov = status.get("hfov_deg") or cfg.TRACK_FALLBACK_HFOV
+        vfov = status.get("vfov_deg") or cfg.TRACK_FALLBACK_VFOV
+
+        ex_n = ex / (w / 2.0) if w else 0.0
+        ey_n = ey / (h / 2.0) if h else 0.0
+
+        roll_target = None
+        pitch_target = None
+        if abs(ex_n) >= cfg.TRACK_DEADBAND:
+            roll_off = _clamp(cfg.ROLL_TRACK_SIGN * ex_n * (hfov / 2.0),
+                              -cfg.TRACK_MAX_STEP_DEG, cfg.TRACK_MAX_STEP_DEG)
+            roll_target = cur_roll + roll_off
+        if abs(ey_n) >= cfg.TRACK_DEADBAND:
+            pitch_off = _clamp(cfg.PITCH_TRACK_SIGN * ey_n * (vfov / 2.0),
+                               -cfg.TRACK_MAX_STEP_DEG, cfg.TRACK_MAX_STEP_DEG)
+            pitch_target = cur_pitch + pitch_off
+        return pitch_target, roll_target
+
+    def _apply_track(self, ex, ey, w, h):
+        self._last_found_t = time.time()
+        pitch_t, roll_t = self._compute_targets(ex, ey, w, h)
+        first = not self._engaged   # fresh integral on (re)acquire
+        if pitch_t is not None:
+            self.controller.set_pitch_deg(pitch_t, reset=first)
+        if roll_t is not None:
+            self.controller.set_roll_deg(roll_t, reset=first)
+        self._engaged = True
+
+    def _track_loop(self):
+        sock = self._track_sock
+        while self._track_running:
+            try:
+                data, _ = sock.recvfrom(4096)
+            except socket.timeout:
+                data = None
+            except OSError:
+                break
+
+            if data:
+                try:
+                    msg = json.loads(data)
+                    ex = float(msg["ex"]); ey = float(msg["ey"])
+                    found = bool(msg["found"])
+                    w = float(msg["w"]); h = float(msg["h"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+                now = time.time()
+                with self._track_lock:
+                    self._track = {"ex": ex, "ey": ey, "found": found,
+                                   "w": w, "h": h, "t": now}
+                if found:
+                    self._apply_track(ex, ey, w, h)
+
+            # Lost-target watchdog: stop the gimbal if no marker for a while.
+            if self._engaged and (time.time() - self._last_found_t) > cfg.TRACK_LOST_GRACE_S:
+                self.controller.stop_pitch()
+                self.controller.stop_roll()
+                self._engaged = False
+
+    def _start_tracking(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", self._track_port))
+        sock.settimeout(0.1)
+        self._track_sock = sock
+        self._track_running = True
+        self._track_thread = threading.Thread(target=self._track_loop, daemon=True)
+        self._track_thread.start()
+
+    def _stop_tracking(self):
+        self._track_running = False
+        if self._track_sock is not None:
+            try:
+                self._track_sock.close()
+            except OSError:
+                pass
+        if self._track_thread is not None:
+            self._track_thread.join(timeout=1.0)
+
+    # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
     def connect(self):
@@ -153,8 +277,12 @@ class PidCalibrator:
         # commands actually reach the camera, then start the control loop.
         self.sender.start()
         self.controller.start()
+        if self._track_port is not None:
+            self._start_tracking()
 
     def stop(self):
+        if self._track_port is not None:
+            self._stop_tracking()
         self.controller.stop()
         self.sender.stop()
         self.sender.disconnect()
@@ -219,6 +347,7 @@ def _parse_args(argv):
     port = ColibriSender.DEFAULT_PORT
     http_host = "127.0.0.1"
     http_port = 8080
+    track_port = None
     i = 1
     while i < len(argv):
         a = argv[i]
@@ -230,17 +359,21 @@ def _parse_args(argv):
             http_host = argv[i + 1]; i += 2
         elif a == "--http-port" and i + 1 < len(argv):
             http_port = int(argv[i + 1]); i += 2
+        elif a == "--track-port" and i + 1 < len(argv):
+            track_port = int(argv[i + 1]); i += 2
+        elif a == "--track":  # enable ArUco follow on the default port
+            track_port = cfg.TRACK_PORT; i += 1
         elif a in ("--help", "-h"):
             print(__doc__); sys.exit(0)
         else:
             print(f"❌ Error: Unknown option '{a}'"); sys.exit(1)
-    return host, port, http_host, http_port
+    return host, port, http_host, http_port, track_port
 
 
 def main():
-    host, port, http_host, http_port = _parse_args(sys.argv)
+    host, port, http_host, http_port, track_port = _parse_args(sys.argv)
 
-    calib = PidCalibrator(host, port)
+    calib = PidCalibrator(host, port, track_port=track_port)
     if not calib.connect():
         print("❌ Could not connect to the proxy. Is proxy.py running?")
         sys.exit(1)
@@ -249,6 +382,8 @@ def main():
     httpd = ThreadingHTTPServer((http_host, http_port), _make_handler(calib))
     url = f"http://{http_host}:{http_port}"
     print(f"🎛️  PID calibrator UI: {url}")
+    if track_port is not None:
+        print(f"🎯 ArUco follow enabled — listening for pixel error on udp/{track_port}")
     print("   (camera transmission auto-started; Ctrl+C to quit)")
     try:
         httpd.serve_forever()

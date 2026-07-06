@@ -6,9 +6,13 @@ control2 has no dependency on the control/ package.
 """
 
 # PID gains (error is in degrees).
-KP = 100.0
+# KP = 100.0
+# KI = 0.1
+# KD = 0.001
+KP = 500
 KI = 0.1
 KD = 0.001
+
 
 DT = 0.05            # control loop period, seconds
 TOLERANCE = 0.1      # deg; within this the PID naturally outputs ~BASELINE
@@ -25,11 +29,38 @@ INTEGRAL_LIMIT = 2047
 
 # Per-axis actuator direction. If, on real hardware, an axis runs AWAY from the
 # target (diverges / saturates), flip the sign for that axis. BRING-UP TUNABLE.
-PITCH_SIGN = +1
+PITCH_SIGN = -1
 ROLL_SIGN = -1
 
 # Allowed setpoint ranges (from the CLI spec).
-PITCH_MIN = 0.0
+PITCH_MIN = -90
 PITCH_MAX = 90.0
 ROLL_MIN = -180.0
 ROLL_MAX = 180.0
+
+# ---------------------------------------------------------------------------
+# ArUco visual-follow (outer loop) tuning
+# ---------------------------------------------------------------------------
+# UDP port the calibrator binds to receive pixel-error packets from the viewer.
+TRACK_PORT = 5005
+
+# Per-axis direction from image error -> gimbal motion. Combined with the 180
+# display flip + hardware direction; flip a sign if that axis chases the wrong
+# way during bring-up. BRING-UP TUNABLE.
+PITCH_TRACK_SIGN = +1
+ROLL_TRACK_SIGN = +1
+
+# Normalized dead-zone (fraction of half-frame). Within this the axis is left
+# alone so the gimbal doesn't jitter when the marker is already ~centered.
+TRACK_DEADBAND = 0.03
+
+# Max angle the setpoint may move away from the current angle in one update
+# (deg). Rejects detection glitches / huge jumps.
+TRACK_MAX_STEP_DEG = 15.0
+
+# If no "found" packet arrives within this many seconds, stop the gimbal.
+TRACK_LOST_GRACE_S = 0.5
+
+# FOV fallback (deg) used only if rx_status has not reported FOV yet.
+TRACK_FALLBACK_HFOV = 60.0
+TRACK_FALLBACK_VFOV = 34.0

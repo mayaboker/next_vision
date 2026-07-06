@@ -40,6 +40,9 @@ class ColibriSender:
         # Optional control2 hook: fired with (pitch_deg, roll_deg) on every
         # rx_status so an external PID controller can consume feedback.
         self.feedback_event = None
+        # Latest parsed rx_status dict (mode/sensor/angles/FOV); read by tools
+        # that need FOV etc. None until the first status arrives.
+        self.last_status = None
     
     def connect(self) -> bool:
         """Connect to proxy server"""
@@ -118,6 +121,7 @@ class ColibriSender:
                 
         elif msg_type == "rx_status":
             status = msg.get("status", {})
+            self.last_status = status
 
             # Feed the latest measured angles to any subscribed controller,
             # independent of the display toggle.

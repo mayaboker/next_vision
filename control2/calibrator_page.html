@@ -113,6 +113,10 @@ function buildPanels() {
     node.querySelector(".applyGains").onclick = () => applyGains(axis);
     node.querySelector(".setSp").onclick = () => setSetpoint(axis);
     node.querySelector(".stop").onclick = () => stopAxis(axis);
+    // Enter in the setpoint box acts like clicking "Set & hold".
+    inputs.sp.addEventListener("keydown", e => {
+      if (e.key === "Enter") { e.preventDefault(); setSetpoint(axis); }
+    });
     host.appendChild(node);
   }
 }
@@ -137,21 +141,23 @@ function setSetpoint(axis) {
 }
 function stopAxis(axis) { post("/stop", {axis}); }
 
-// Only overwrite a field the user is not currently editing.
-function setIfIdle(input, value) {
-  if (document.activeElement === input) return;
-  if (input.dataset.dirty === "1") return;
-  input.value = Number(value).toString();
+// Gain/setpoint boxes are user-owned inputs: seed them once from the server,
+// then never let the poll overwrite what you type. The poll only reflects the
+// *applied* gains in the readout text (see poll()).
+let fieldsSeeded = false;
+function seedFields(data) {
+  if (fieldsSeeded) return;
+  for (const axis of AXES) {
+    const a = data[axis], i = els[axis].inputs;
+    i.kp.value = a.kp; i.ki.value = a.ki; i.kd.value = a.kd;
+    if (a.active) i.sp.value = a.setpoint;
+  }
+  fieldsSeeded = true;
 }
 
-function markDirtyHandlers() {
-  for (const axis of AXES) {
-    for (const k of Object.keys(els[axis].inputs)) {
-      const inp = els[axis].inputs[k];
-      inp.addEventListener("input", () => inp.dataset.dirty = "1");
-      inp.addEventListener("blur", () => inp.dataset.dirty = "0");
-    }
-  }
+function fmtGain(v) {
+  // compact but exact-ish display for the readout
+  return Math.abs(v) >= 1 ? (+v).toFixed(2).replace(/\.?0+$/, "") : String(+v);
 }
 
 function drawChart(canvas, series, now, windowSec, yMinHint, yMaxHint) {
@@ -222,18 +228,16 @@ async function poll() {
     setConn(false, false); return;
   }
   setConn(data.connected, data.receiving);
+  seedFields(data);
   for (const axis of AXES) {
     const a = data[axis], e = els[axis];
-    setIfIdle(e.inputs.kp, a.kp);
-    setIfIdle(e.inputs.ki, a.ki);
-    setIfIdle(e.inputs.kd, a.kd);
-    if (a.active) setIfIdle(e.inputs.sp, a.setpoint);
     e.range.textContent = `range ${a.min}…${a.max}°` + (a.active ? "" : "  ·  not engaged");
     const err = a.active ? (a.setpoint - a.measured) : null;
     e.readout.innerHTML =
       `measured <b>${a.measured.toFixed(2)}°</b>` +
       (a.active ? `   setpoint <b>${a.setpoint.toFixed(2)}°</b>   error <b>${err.toFixed(2)}°</b>`
-                : `   <span>idle</span>`);
+                : `   <span>idle</span>`) +
+      `<br>applied gains  Kp <b>${fmtGain(a.kp)}</b>  Ki <b>${fmtGain(a.ki)}</b>  Kd <b>${fmtGain(a.kd)}</b>`;
     drawChart(e.canvas, a.series, data.now, data.window, a.min, a.max);
   }
 }
@@ -246,7 +250,6 @@ function setConn(connected, receiving) {
 }
 
 buildPanels();
-markDirtyHandlers();
 poll();
 setInterval(poll, 150);
 </script>

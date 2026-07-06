@@ -1,0 +1,2 @@
+#!/usr/bin/env bash
+gst-launch-1.0 udpsrc port=5001 caps="application/x-rtp,media=video,clock-rate=90000,encoding-name=H265,payload=96" ! rtpjitterbuffer latency=50 ! rtph265depay ! h265parse ! avdec_h265 ! videoconvert ! videoflip method=rotate-180 ! autovideosink sync=false
