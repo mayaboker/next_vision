@@ -118,22 +118,28 @@ git push -u origin main
 
 
 ##  POC
-on ssh:
+chip side [192.168.1.30/24]:
 ```bash
-python proxy.py /dev/ttyS0 --host 192.168.1.30 --port 5000
+ssh ubuntu@192.168.1.30 # passward: ubuntu
+sudo su
+cd /local/10_apps
+## run stream sender:
+# port 5001 for RPT video straming using gstreamer
+./rtsp_cam_sender.sh 
+
+## run proxy
+# port 5000 for control
+python nextCAM/proxy.py /dev/ttyS0 --host 192.168.1.30 --port 5000
 ```
 
-on pc:
+pc side [192.168.1.201/24]:
 ```bash
-python control2/pid_calibrator.py --host 192.168.1.30 --port 5000
+./control/aruco_id0_viewer.py --track
+python control2/pid_calibrator.py --host 192.168.1.30 --port 5000 --track
 ```
 
 
-chip ip 192.168.1.30/24 user ubuntu pw ubuntu `sudo su` + `cd /local/10_apps`
-pc ip 192.168.1.200/24
-/dev/ttyS0
-port 5000 for control
-port 5001 for RPT video straming using gstreamer: `./rtsp_cam_receiver.py`
+
 port 5005 for pixel-to-move stream (--track currently on the pid_controller run and aruco_id0_viewer.py)
 Note that currently the video is rotated-180, so we also rotate the qr center pixel to match.
 
