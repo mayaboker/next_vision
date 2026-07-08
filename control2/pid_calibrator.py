@@ -22,9 +22,16 @@ ArUco follow (--track / --track-port): binds a UDP socket and expects pixel-erro
 packets {"ex","ey","found","w","h"} from aruco_id0_viewer.py --track. Each packet
 is converted (via live FOV + current gimbal angle) into a target angle that drives
 the tuned angle-hold PID so the camera keeps the marker centered.
+
+Wide-cam pointing (--point / --point-port): binds a UDP socket and expects
+detection packets {"x","y","w","h","hfov","found"} from a fixed wide camera
+(e.g. drones_best_conf/stream_detections.py). Each detection's off-axis angle in
+the wide frame is used as the ABSOLUTE gimbal angle to point at it (gimbal starts
+centered). Use this to slew the zoom gimbal toward a detected target.
 """
 
 import json
+import math
 import os
 import socket
 import sys
@@ -60,7 +67,7 @@ _FRESH_FEEDBACK_S = 2.0         # feedback considered live if newer than this
 
 
 class PidCalibrator:
-    def __init__(self, host, port, track_port=None):
+    def __init__(self, host, port, track_port=None, point_port=None):
         self.sender = ColibriSender(host, port)
         # Quiet the sender's terminal chatter; the GUI is the display now.
         self.sender.show_tx = False
@@ -90,6 +97,18 @@ class PidCalibrator:
         self._track = None            # latest {ex,ey,found,w,h,t}
         self._last_found_t = 0.0
         self._engaged = False         # currently driving from a found marker
+
+        # Wide-camera "point-at-detection" (absolute pointing) state.
+        self._point_port = point_port
+        self._point_running = False
+        self._point_thread = None
+        self._point_sock = None
+        self._point_lock = threading.Lock()
+        self._point = None            # latest {x,y,w,h,hfov,found,t}
+        self._point_last_found_t = 0.0
+        self._point_engaged = False
+        self._point_last_pitch = 0.0
+        self._point_last_roll = 0.0
 
     # ------------------------------------------------------------------ #
     # Wiring
@@ -137,6 +156,16 @@ class PidCalibrator:
             "ey": tr["ey"] if tr else None,
             "age": (now - tr["t"]) if tr else None,
         }
+        with self._point_lock:
+            po = dict(self._point) if self._point else None
+        pointing = {
+            "enabled": self._point_port is not None,
+            "engaged": self._point_engaged,
+            "found": bool(po["found"]) if po else False,
+            "x": po["x"] if po else None,
+            "y": po["y"] if po else None,
+            "age": (now - po["t"]) if po else None,
+        }
         return {
             "now": now,
             "window": _WINDOW_SECONDS,
@@ -146,6 +175,7 @@ class PidCalibrator:
             "pitch": st["pitch"],
             "roll": st["roll"],
             "tracking": tracking,
+            "pointing": pointing,
         }
 
     # ------------------------------------------------------------------ #
@@ -267,6 +297,92 @@ class PidCalibrator:
             self._track_thread.join(timeout=1.0)
 
     # ------------------------------------------------------------------ #
+    # Wide-camera "point-at-detection" (absolute pointing)
+    # ------------------------------------------------------------------ #
+    def _compute_point_target(self, x, y, w, h, hfov):
+        """Wide-frame detection pixel -> ABSOLUTE gimbal (pitch, roll) angle.
+        The wide camera is fixed and boresighted with the gimbal at center, so
+        the detection's off-axis angle IS the angle to point at it."""
+        if not hfov or w <= 0:
+            return None, None
+        fx = (w / 2.0) / math.tan(math.radians(hfov) / 2.0)  # pixels; square pixels
+        if fx <= 0:
+            return None, None
+        roll = cfg.ROLL_POINT_SIGN * math.degrees(math.atan((x - w / 2.0) / fx))
+        pitch = cfg.PITCH_POINT_SIGN * math.degrees(math.atan((y - h / 2.0) / fx))
+        return pitch, roll
+
+    def _apply_point(self, x, y, w, h, hfov):
+        self._point_last_found_t = time.time()
+        pitch_t, roll_t = self._compute_point_target(x, y, w, h, hfov)
+        if pitch_t is None:
+            return
+        first = not self._point_engaged
+        if not first:  # limit per-update jump (glitch rejection)
+            pitch_t = _clamp(pitch_t, self._point_last_pitch - cfg.POINT_MAX_STEP_DEG,
+                             self._point_last_pitch + cfg.POINT_MAX_STEP_DEG)
+            roll_t = _clamp(roll_t, self._point_last_roll - cfg.POINT_MAX_STEP_DEG,
+                            self._point_last_roll + cfg.POINT_MAX_STEP_DEG)
+        self.controller.set_pitch_deg(pitch_t, reset=first)
+        self.controller.set_roll_deg(roll_t, reset=first)
+        self._point_last_pitch, self._point_last_roll = pitch_t, roll_t
+        self._point_engaged = True
+
+    def _point_loop(self):
+        sock = self._point_sock
+        while self._point_running:
+            try:
+                data, _ = sock.recvfrom(4096)
+            except socket.timeout:
+                data = None
+            except OSError:
+                break
+
+            if data:
+                try:
+                    msg = json.loads(data)
+                    x = float(msg["x"]); y = float(msg["y"])
+                    w = float(msg["w"]); h = float(msg["h"])
+                    hfov = float(msg.get("hfov", cfg.TRACK_FALLBACK_HFOV))
+                    found = bool(msg["found"])
+                except (ValueError, KeyError, TypeError):
+                    continue
+                now = time.time()
+                with self._point_lock:
+                    self._point = {"x": x, "y": y, "w": w, "h": h,
+                                   "hfov": hfov, "found": found, "t": now}
+                if found:
+                    self._apply_point(x, y, w, h, hfov)
+
+            if self._point_engaged and (time.time() - self._point_last_found_t) > cfg.POINT_LOST_GRACE_S:
+                self.controller.stop_pitch()
+                self.controller.stop_roll()
+                self._point_engaged = False
+
+    def _start_pointing(self):
+        # Start boresighted at center, then listen for detections.
+        self.controller.set_pitch_deg(0.0, reset=True)
+        self.controller.set_roll_deg(0.0, reset=True)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", self._point_port))
+        sock.settimeout(0.1)
+        self._point_sock = sock
+        self._point_running = True
+        self._point_thread = threading.Thread(target=self._point_loop, daemon=True)
+        self._point_thread.start()
+
+    def _stop_pointing(self):
+        self._point_running = False
+        if self._point_sock is not None:
+            try:
+                self._point_sock.close()
+            except OSError:
+                pass
+        if self._point_thread is not None:
+            self._point_thread.join(timeout=1.0)
+
+    # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
     def connect(self):
@@ -279,10 +395,14 @@ class PidCalibrator:
         self.controller.start()
         if self._track_port is not None:
             self._start_tracking()
+        if self._point_port is not None:
+            self._start_pointing()
 
     def stop(self):
         if self._track_port is not None:
             self._stop_tracking()
+        if self._point_port is not None:
+            self._stop_pointing()
         self.controller.stop()
         self.sender.stop()
         self.sender.disconnect()
@@ -348,6 +468,7 @@ def _parse_args(argv):
     http_host = "127.0.0.1"
     http_port = 8080
     track_port = None
+    point_port = None
     i = 1
     while i < len(argv):
         a = argv[i]
@@ -363,17 +484,21 @@ def _parse_args(argv):
             track_port = int(argv[i + 1]); i += 2
         elif a == "--track":  # enable ArUco follow on the default port
             track_port = cfg.TRACK_PORT; i += 1
+        elif a == "--point-port" and i + 1 < len(argv):
+            point_port = int(argv[i + 1]); i += 2
+        elif a == "--point":  # enable wide-cam pointing on the default port
+            point_port = cfg.POINT_PORT; i += 1
         elif a in ("--help", "-h"):
             print(__doc__); sys.exit(0)
         else:
             print(f"❌ Error: Unknown option '{a}'"); sys.exit(1)
-    return host, port, http_host, http_port, track_port
+    return host, port, http_host, http_port, track_port, point_port
 
 
 def main():
-    host, port, http_host, http_port, track_port = _parse_args(sys.argv)
+    host, port, http_host, http_port, track_port, point_port = _parse_args(sys.argv)
 
-    calib = PidCalibrator(host, port, track_port=track_port)
+    calib = PidCalibrator(host, port, track_port=track_port, point_port=point_port)
     if not calib.connect():
         print("❌ Could not connect to the proxy. Is proxy.py running?")
         sys.exit(1)
@@ -384,6 +509,8 @@ def main():
     print(f"🎛️  PID calibrator UI: {url}")
     if track_port is not None:
         print(f"🎯 ArUco follow enabled — listening for pixel error on udp/{track_port}")
+    if point_port is not None:
+        print(f"📍 Wide-cam pointing enabled — listening for detections on udp/{point_port}")
     print("   (camera transmission auto-started; Ctrl+C to quit)")
     try:
         httpd.serve_forever()

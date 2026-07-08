@@ -64,3 +64,23 @@ TRACK_LOST_GRACE_S = 0.5
 # FOV fallback (deg) used only if rx_status has not reported FOV yet.
 TRACK_FALLBACK_HFOV = 60.0
 TRACK_FALLBACK_VFOV = 34.0
+
+# ---------------------------------------------------------------------------
+# Wide-camera "point-at-detection" mode (absolute pointing)
+# ---------------------------------------------------------------------------
+# The wide detection camera is FIXED and boresight-aligned with the gimbal at
+# center. A detection's off-axis angle in the wide frame IS the absolute gimbal
+# angle to point at it (no dependence on current gimbal angle).
+# UDP port the calibrator binds to receive wide-camera detection packets.
+POINT_PORT = 5006
+
+# Per-axis direction from wide-frame detection -> gimbal angle. Flip if an axis
+# points the wrong way during bring-up. BRING-UP TUNABLE.
+PITCH_POINT_SIGN = +1
+ROLL_POINT_SIGN = +1
+
+# Max the pointing setpoint may jump in one update (deg); rejects glitches.
+POINT_MAX_STEP_DEG = 20.0
+
+# If no "found" detection arrives within this many seconds, stop the gimbal.
+POINT_LOST_GRACE_S = 0.5
