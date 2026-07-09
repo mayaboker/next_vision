@@ -10,7 +10,7 @@ gst-launch-1.0 -v \
     queue ! \
     rtpvrawpay pt=96 ! \
     udpsink host=192.168.1.200 port=5000
-
+    
 
 
 ```

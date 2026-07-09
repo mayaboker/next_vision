@@ -23,7 +23,16 @@ class ColibriSender:
     
     DEFAULT_HOST = '127.0.0.1'
     DEFAULT_PORT = 12345
-    
+
+    # Rate command range (mirrors driver.ColibriProtocol); MIDDLE = no movement.
+    RATE_MIN_VAL = 0
+    RATE_MIDDLE_VAL = 2048
+    RATE_MAX_VAL = 4095
+
+    # rx_status angle fields per axis (negated when that axis is mounted inverted).
+    _PITCH_ANGLE_KEYS = ('total_pitch_deg', 'mech_pitch_deg', 'elec_pitch_deg')
+    _ROLL_ANGLE_KEYS = ('total_roll_deg', 'mech_roll_deg', 'elec_roll_deg')
+
     def __init__(self, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         self.host = host
         self.port = port
@@ -43,6 +52,15 @@ class ColibriSender:
         # Latest parsed rx_status dict (mode/sensor/angles/FOV); read by tools
         # that need FOV etc. None until the first status arrives.
         self.last_status = None
+
+        # Mount orientation. When the camera is mounted upside down, an axis's
+        # measured angle (coming in) and its rate command (going out) are both
+        # inverted here, so every consumer keeps a single right-side-up
+        # convention (a "right"/"up" target slews the camera right/up, and the
+        # reported angle stays right-side-up). Off by default; the control layer
+        # sets these (see control2.settings.MOUNT_INVERT_*).
+        self.invert_pitch = False
+        self.invert_roll = False
     
     def connect(self) -> bool:
         """Connect to proxy server"""
@@ -120,7 +138,7 @@ class ColibriSender:
                 print(f"📥 RX: {msg.get('data', '')}")
                 
         elif msg_type == "rx_status":
-            status = msg.get("status", {})
+            status = self._orient_status(msg.get("status", {}))
             self.last_status = status
 
             # Feed the latest measured angles to any subscribed controller,
@@ -214,13 +232,37 @@ class ColibriSender:
         """Set zoom"""
         return self.send_command({"cmd": "zoom", "value": value})
     
+    def _orient_rate(self, value: int, invert: bool) -> int:
+        """Reflect a rate command around the neutral value for an inverted axis,
+        so 'move up/right' still moves the camera up/right physically."""
+        value = int(value)
+        if not invert:
+            return value
+        reflected = 2 * self.RATE_MIDDLE_VAL - value
+        return max(self.RATE_MIN_VAL, min(self.RATE_MAX_VAL, reflected))
+
+    def _orient_status(self, status: Dict) -> Dict:
+        """Negate the measured angles of any inverted axis so feedback shares the
+        same right-side-up convention as the rate commands."""
+        if not (self.invert_pitch or self.invert_roll):
+            return status
+        keys = []
+        if self.invert_pitch:
+            keys += self._PITCH_ANGLE_KEYS
+        if self.invert_roll:
+            keys += self._ROLL_ANGLE_KEYS
+        for key in keys:
+            if status.get(key) is not None:
+                status[key] = -status[key]
+        return status
+
     def pitch(self, value: int):
         """Set pitch value"""
-        return self.send_command({"cmd": "pitch", "value": value})
-    
+        return self.send_command({"cmd": "pitch", "value": self._orient_rate(value, self.invert_pitch)})
+
     def roll(self, value: int):
         """Set roll value"""
-        return self.send_command({"cmd": "roll", "value": value})
+        return self.send_command({"cmd": "roll", "value": self._orient_rate(value, self.invert_roll)})
     
     def center(self):
         """Center gimbal"""

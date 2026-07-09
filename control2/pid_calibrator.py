@@ -13,6 +13,11 @@ Usage:
     python control2/pid_calibrator.py [--host <ip>] [--port <port>]
                                       [--http-host <ip>] [--http-port <port>]
                                       [--track | --track-port <udp_port>]
+                                      [--point | --point-port <udp_port>]
+                                      [--aim   | --aim-port   <udp_port>]
+
+(--track, --point, and --aim all drive the gimbal's absolute setpoints, so at
+most one may be enabled at a time.)
 
 Then open the printed URL (default http://127.0.0.1:8080) in a browser.
 On launch the calibrator auto-starts 25 Hz camera transmission (so rx_status
@@ -28,6 +33,13 @@ detection packets {"x","y","w","h","hfov","found"} from a fixed wide camera
 (e.g. drones_best_conf/stream_detections.py). Each detection's off-axis angle in
 the wide frame is used as the ABSOLUTE gimbal angle to point at it (gimbal starts
 centered). Use this to slew the zoom gimbal toward a detected target.
+
+Absolute-angle aim (--aim / --aim-port): binds a UDP socket and expects packets
+{"yaw","pitch","found"} of already-computed real-world angles (degrees) from an
+upstream sensor that owns the geometry — e.g. drones_best_conf run with
+--gimbal-stream, whose 3-camera 32° rig converts a confirmed drone's stitched
+pixel into (yaw, pitch). yaw drives the roll axis (azimuth); pitch drives the
+pitch axis. On loss of "found" the gimbal is stopped after AIM_LOST_GRACE_S.
 """
 
 import json
@@ -67,12 +79,15 @@ _FRESH_FEEDBACK_S = 2.0         # feedback considered live if newer than this
 
 
 class PidCalibrator:
-    def __init__(self, host, port, track_port=None, point_port=None):
+    def __init__(self, host, port, track_port=None, point_port=None, aim_port=None):
         self.sender = ColibriSender(host, port)
         # Quiet the sender's terminal chatter; the GUI is the display now.
         self.sender.show_tx = False
         self.sender.show_rx_raw = False
         self.sender.show_rx_status = False
+        # Correct the upside-down mount once, at the gimbal boundary.
+        self.sender.invert_pitch = cfg.MOUNT_INVERT_PITCH
+        self.sender.invert_roll = cfg.MOUNT_INVERT_ROLL
 
         self.feedback_event = Event()
         self.command_event = Event()
@@ -109,6 +124,18 @@ class PidCalibrator:
         self._point_engaged = False
         self._point_last_pitch = 0.0
         self._point_last_roll = 0.0
+
+        # Absolute-angle "aim" state (upstream sensor sends yaw/pitch degrees).
+        self._aim_port = aim_port
+        self._aim_running = False
+        self._aim_thread = None
+        self._aim_sock = None
+        self._aim_lock = threading.Lock()
+        self._aim = None              # latest {yaw,pitch,found,t}
+        self._aim_last_found_t = 0.0
+        self._aim_engaged = False
+        self._aim_last_pitch = 0.0
+        self._aim_last_roll = 0.0
 
     # ------------------------------------------------------------------ #
     # Wiring
@@ -166,6 +193,16 @@ class PidCalibrator:
             "y": po["y"] if po else None,
             "age": (now - po["t"]) if po else None,
         }
+        with self._aim_lock:
+            am = dict(self._aim) if self._aim else None
+        aiming = {
+            "enabled": self._aim_port is not None,
+            "engaged": self._aim_engaged,
+            "found": bool(am["found"]) if am else False,
+            "yaw": am["yaw"] if am else None,
+            "pitch": am["pitch"] if am else None,
+            "age": (now - am["t"]) if am else None,
+        }
         return {
             "now": now,
             "window": _WINDOW_SECONDS,
@@ -176,6 +213,7 @@ class PidCalibrator:
             "roll": st["roll"],
             "tracking": tracking,
             "pointing": pointing,
+            "aiming": aiming,
         }
 
     # ------------------------------------------------------------------ #
@@ -383,6 +421,73 @@ class PidCalibrator:
             self._point_thread.join(timeout=1.0)
 
     # ------------------------------------------------------------------ #
+    # Absolute-angle "aim" (upstream sensor already did the geometry)
+    # ------------------------------------------------------------------ #
+    def _apply_aim(self, yaw, pitch):
+        self._aim_last_found_t = time.time()
+        pitch_t = cfg.AIM_PITCH_SIGN * pitch
+        roll_t = cfg.AIM_YAW_SIGN * yaw   # yaw (azimuth) drives the roll axis
+        first = not self._aim_engaged     # fresh integral on (re)acquire
+        if not first:  # limit per-update jump (glitch rejection)
+            pitch_t = _clamp(pitch_t, self._aim_last_pitch - cfg.AIM_MAX_STEP_DEG,
+                             self._aim_last_pitch + cfg.AIM_MAX_STEP_DEG)
+            roll_t = _clamp(roll_t, self._aim_last_roll - cfg.AIM_MAX_STEP_DEG,
+                            self._aim_last_roll + cfg.AIM_MAX_STEP_DEG)
+        self.controller.set_pitch_deg(pitch_t, reset=first)
+        self.controller.set_roll_deg(roll_t, reset=first)
+        self._aim_last_pitch, self._aim_last_roll = pitch_t, roll_t
+        self._aim_engaged = True
+
+    def _aim_loop(self):
+        sock = self._aim_sock
+        while self._aim_running:
+            try:
+                data, _ = sock.recvfrom(4096)
+            except socket.timeout:
+                data = None
+            except OSError:
+                break
+
+            if data:
+                try:
+                    msg = json.loads(data)
+                    found = bool(msg["found"])
+                    yaw = float(msg["yaw"]) if found else 0.0
+                    pitch = float(msg["pitch"]) if found else 0.0
+                except (ValueError, KeyError, TypeError):
+                    continue
+                now = time.time()
+                with self._aim_lock:
+                    self._aim = {"yaw": yaw, "pitch": pitch, "found": found, "t": now}
+                if found:
+                    self._apply_aim(yaw, pitch)
+
+            if self._aim_engaged and (time.time() - self._aim_last_found_t) > cfg.AIM_LOST_GRACE_S:
+                self.controller.stop_pitch()
+                self.controller.stop_roll()
+                self._aim_engaged = False
+
+    def _start_aiming(self):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        sock.bind(("0.0.0.0", self._aim_port))
+        sock.settimeout(0.1)
+        self._aim_sock = sock
+        self._aim_running = True
+        self._aim_thread = threading.Thread(target=self._aim_loop, daemon=True)
+        self._aim_thread.start()
+
+    def _stop_aiming(self):
+        self._aim_running = False
+        if self._aim_sock is not None:
+            try:
+                self._aim_sock.close()
+            except OSError:
+                pass
+        if self._aim_thread is not None:
+            self._aim_thread.join(timeout=1.0)
+
+    # ------------------------------------------------------------------ #
     # Lifecycle
     # ------------------------------------------------------------------ #
     def connect(self):
@@ -397,12 +502,16 @@ class PidCalibrator:
             self._start_tracking()
         if self._point_port is not None:
             self._start_pointing()
+        if self._aim_port is not None:
+            self._start_aiming()
 
     def stop(self):
         if self._track_port is not None:
             self._stop_tracking()
         if self._point_port is not None:
             self._stop_pointing()
+        if self._aim_port is not None:
+            self._stop_aiming()
         self.controller.stop()
         self.sender.stop()
         self.sender.disconnect()
@@ -469,6 +578,7 @@ def _parse_args(argv):
     http_port = 8080
     track_port = None
     point_port = None
+    aim_port = None
     i = 1
     while i < len(argv):
         a = argv[i]
@@ -488,17 +598,27 @@ def _parse_args(argv):
             point_port = int(argv[i + 1]); i += 2
         elif a == "--point":  # enable wide-cam pointing on the default port
             point_port = cfg.POINT_PORT; i += 1
+        elif a == "--aim-port" and i + 1 < len(argv):
+            aim_port = int(argv[i + 1]); i += 2
+        elif a == "--aim":  # enable absolute-angle aim on the default port
+            aim_port = cfg.AIM_PORT; i += 1
         elif a in ("--help", "-h"):
             print(__doc__); sys.exit(0)
         else:
             print(f"❌ Error: Unknown option '{a}'"); sys.exit(1)
-    return host, port, http_host, http_port, track_port, point_port
+
+    # track / point / aim all drive the same absolute setpoints; only one may
+    # own the gimbal at a time.
+    if sum(p is not None for p in (track_port, point_port, aim_port)) > 1:
+        print("❌ Error: use at most one of --track, --point, --aim"); sys.exit(1)
+    return host, port, http_host, http_port, track_port, point_port, aim_port
 
 
 def main():
-    host, port, http_host, http_port, track_port, point_port = _parse_args(sys.argv)
+    host, port, http_host, http_port, track_port, point_port, aim_port = _parse_args(sys.argv)
 
-    calib = PidCalibrator(host, port, track_port=track_port, point_port=point_port)
+    calib = PidCalibrator(host, port, track_port=track_port, point_port=point_port,
+                          aim_port=aim_port)
     if not calib.connect():
         print("❌ Could not connect to the proxy. Is proxy.py running?")
         sys.exit(1)
@@ -511,6 +631,8 @@ def main():
         print(f"🎯 ArUco follow enabled — listening for pixel error on udp/{track_port}")
     if point_port is not None:
         print(f"📍 Wide-cam pointing enabled — listening for detections on udp/{point_port}")
+    if aim_port is not None:
+        print(f"🎯 Aim enabled — listening for absolute yaw/pitch angles on udp/{aim_port}")
     print("   (camera transmission auto-started; Ctrl+C to quit)")
     try:
         httpd.serve_forever()

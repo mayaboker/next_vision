@@ -16,7 +16,7 @@ camera hardware
   <serial: /dev/ttyS0 or /dev/ttyUSB0>
 card running serailcontroler/proxy.py
   <TCP JSON: port 12345>
-local station running sender.py or control/shob.py
+local station running sender.py
 ```
 
 ## Install
@@ -33,7 +33,7 @@ On the local station, for the OpenCV control UI:
 python3 -m pip install -r requirements-local.txt
 ```
 
-For the GStreamer video path used by `control/shob.py`, you may also need system packages such as `python3-gi`, GStreamer plugins, and an OpenCV build with GStreamer support.
+For the GStreamer video path, you may also need system packages such as `python3-gi`, GStreamer plugins, and an OpenCV build with GStreamer support.
 
 ## Run The Serial Proxy
 
@@ -80,23 +80,6 @@ python3 serailcontroler/sender.py --host <CARD_IP> --cmd ping
 python3 serailcontroler/sender.py --host <CARD_IP> --cmd sensor --value ir
 python3 serailcontroler/sender.py --host <CARD_IP> --cmd zoom --value in
 ```
-
-## Run The Visual Controller
-
-Edit `control/src/camera_control/settings.py` and set:
-
-```python
-CAMERA_IP = "<CARD_IP>"
-CAMERA_FEEDBACK_IP = "<CARD_IP>"
-```
-
-Then run:
-
-```bash
-python3 control/shob.py
-```
-
-`control/shob.py` expects an H265 RTP stream on UDP port `5000`.
 
 ## Git Push
 
@@ -146,3 +129,38 @@ Note that currently the video is rotated-180, so we also rotate the qr center pi
 adding ip:
 ip link show
 `sudo ip route add default via 192.168.1.1 dev eth0` (replace eth0 with the right if)
+
+
+
+## Drone-aim pipeline (3 static cameras -> gimbal)
+
+Auto-slew the Colibri gimbal to a drone detected by the sibling
+`../drones_best_conf` 3-camera rig. It converts a confirmed detection's pixel to
+a real-world (yaw, pitch) and streams it over UDP :5007; `pid_calibrator --aim`
+drives the gimbal there. Full details: `DRONE_AIM_PIPELINE.md`.
+
+Run in three terminals (add `../drones_best_conf` as needed):
+
+```bash
+# 1) card [192.168.1.30] - serial proxy for gimbal control (port 5000)
+python3 serailcontroler/proxy.py /dev/ttyS0 --host 192.168.1.30 --port 5000
+
+# 2) PC - gimbal receiver: listens for yaw/pitch on udp:5007, drives the gimbal
+#    (open http://127.0.0.1:8080 to watch it track; upside-down mount handled by
+#     MOUNT_INVERT_* in control2/settings.py)
+python control2/pid_calibrator.py --host 192.168.1.30 --port 5000 --aim
+
+# 3) detection box (in ../drones_best_conf) - detect + stream target angles
+uv run python run_experiment.py --config-path configs/online.yaml \
+  --camera-ip 'udp://@:5001' --camera-ip 'udp://@:5002' --camera-ip 'udp://@:5003' \
+  --gimbal-stream --gimbal-host <PC_IP> --gimbal-port 5007
+```
+
+Localhost test with no cameras (needs `ffmpeg`): feed video files and/or a
+constant black screen to the three ports, then run terminals 2 and 3 with
+`--gimbal-host 127.0.0.1`:
+
+```bash
+# in ../drones_best_conf  (use 'black' for any camera you don't have a clip for)
+./stream_three_udp_test.sh black 'vids/cam32_500_attack_sky(9).mp4' black
+```

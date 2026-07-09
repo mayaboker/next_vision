@@ -28,9 +28,11 @@ for _p in (_HERE, os.path.join(_REPO, "serailcontroler")):
 from sender import ColibriSender, SenderShell  # noqa: E402  (from serailcontroler)
 
 try:  # package import
+    from . import settings as cfg
     from .event_bus import Event
     from .gimbal_pid_controller import GimbalPIDController
 except ImportError:  # script import
+    import settings as cfg
     from event_bus import Event
     from gimbal_pid_controller import GimbalPIDController
 
@@ -97,6 +99,9 @@ def main():
     host, port = _parse_args(sys.argv)
 
     sender = ColibriSender(host, port)
+    # Correct the upside-down mount once, at the gimbal boundary.
+    sender.invert_pitch = cfg.MOUNT_INVERT_PITCH
+    sender.invert_roll = cfg.MOUNT_INVERT_ROLL
 
     feedback_event = Event()
     command_event = Event()
