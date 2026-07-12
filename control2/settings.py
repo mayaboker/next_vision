@@ -9,8 +9,8 @@ control2 has no dependency on the control/ package.
 # KP = 100.0
 # KI = 0.1
 # KD = 0.001
-KP = 500
-KI = 0.1
+KP = 100
+KI = 0.01
 KD = 0.001
 
 
@@ -114,3 +114,10 @@ AIM_MAX_STEP_DEG = 20.0
 
 # If no "found" packet arrives within this many seconds, stop the gimbal.
 AIM_LOST_GRACE_S = 0.5
+
+# Measured-angle feedback. While aiming, echo the gimbal's measured
+# (yaw = roll axis, pitch) back to whoever is sending the aim packets (their
+# source IP) on this UDP port, so an upstream display (the drones_best_conf
+# dashboard) can show the real gimbal orientation next to the commanded one.
+# Set to 0 to disable.
+AIM_FEEDBACK_PORT = 5008

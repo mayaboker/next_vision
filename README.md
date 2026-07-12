@@ -107,7 +107,7 @@ ssh ubuntu@192.168.1.30 # passward: ubuntu
 sudo su
 cd /local/10_apps
 ## run stream sender:
-# port 5001 for RPT video straming using gstreamer
+# port 5010 for RTP video streaming using gstreamer
 ./rtsp_cam_sender.sh 
 
 ## run proxy

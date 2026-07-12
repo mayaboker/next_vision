@@ -136,6 +136,7 @@ class PidCalibrator:
         self._aim_engaged = False
         self._aim_last_pitch = 0.0
         self._aim_last_roll = 0.0
+        self._aim_peer_ip = None       # source of aim packets, for feedback echo
 
     # ------------------------------------------------------------------ #
     # Wiring
@@ -442,13 +443,14 @@ class PidCalibrator:
         sock = self._aim_sock
         while self._aim_running:
             try:
-                data, _ = sock.recvfrom(4096)
+                data, addr = sock.recvfrom(4096)
             except socket.timeout:
                 data = None
             except OSError:
                 break
 
             if data:
+                self._aim_peer_ip = addr[0]
                 try:
                     msg = json.loads(data)
                     found = bool(msg["found"])
@@ -461,11 +463,32 @@ class PidCalibrator:
                     self._aim = {"yaw": yaw, "pitch": pitch, "found": found, "t": now}
                 if found:
                     self._apply_aim(yaw, pitch)
+                self._send_aim_feedback()
 
             if self._aim_engaged and (time.time() - self._aim_last_found_t) > cfg.AIM_LOST_GRACE_S:
                 self.controller.stop_pitch()
                 self.controller.stop_roll()
                 self._aim_engaged = False
+
+    def _send_aim_feedback(self):
+        # Echo the gimbal's measured orientation back to the aim-packet sender so
+        # an upstream display can show real vs commanded angles. yaw = roll axis.
+        port = getattr(cfg, "AIM_FEEDBACK_PORT", 0)
+        if not port or self._aim_peer_ip is None or self._aim_sock is None:
+            return
+        st = self.controller.get_state()
+        payload = {
+            "yaw": st["roll"]["measured"],
+            "pitch": st["pitch"]["measured"],
+            "engaged": self._aim_engaged,
+        }
+        try:
+            self._aim_sock.sendto(
+                json.dumps(payload).encode("utf-8"),
+                (self._aim_peer_ip, int(port)),
+            )
+        except OSError:
+            pass
 
     def _start_aiming(self):
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)

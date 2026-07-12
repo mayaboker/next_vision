@@ -17,9 +17,9 @@ marker was generated from. id 0 exists in every dictionary but the black/white
 pattern differs per dictionary, so a mismatch means nothing is detected.
 
 Usage:
-  python3 control/aruco_id0_viewer.py                     # port 5001, DICT_4X4_50, id 0, 180-flip on
+  python3 control/aruco_id0_viewer.py                     # port 5010, DICT_4X4_50, id 0, 180-flip on
   python3 control/aruco_id0_viewer.py --dict 6X6_250 --id 0
-  python3 control/aruco_id0_viewer.py --port 5001 --no-flip
+  python3 control/aruco_id0_viewer.py --port 5010 --no-flip
   (press 'q' in the window to quit)
 """
 
@@ -87,7 +87,7 @@ def make_detector(dictionary_id):
 
 def main():
     parser = argparse.ArgumentParser(description="Overlay a target ArUco marker on the H265 stream.")
-    parser.add_argument("--port", type=int, default=5001, help="UDP port of the H265 RTP stream (default 5001)")
+    parser.add_argument("--port", type=int, default=5010, help="UDP port of the H265 RTP stream (default 5010)")
     parser.add_argument("--dict", default="4X4_50", help="ArUco dictionary, must match the printed marker (default 4X4_50)")
     parser.add_argument("--id", type=int, default=0, help="Target marker id to highlight (default 0)")
     parser.add_argument("--no-flip", action="store_true", help="Do NOT rotate 180 (camera is mounted upside down by default)")
