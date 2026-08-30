@@ -1,0 +1,8 @@
+[project]
+name = "next-vision-field"
+version = "0.1.0"
+description = "Minimal Colibri field proxy"
+requires-python = ">=3.10"
+dependencies = [
+    "pyserial>=3.5,<4",
+]

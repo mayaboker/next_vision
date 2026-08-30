@@ -1,0 +1,6 @@
+[project]
+name = "next-vision-home"
+version = "0.1.0"
+description = "Minimal Colibri angle-hold controller"
+requires-python = ">=3.10"
+dependencies = []

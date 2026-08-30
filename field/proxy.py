@@ -14,7 +14,7 @@ import signal
 from typing import Optional, Dict, Set, Any
 from dataclasses import asdict
 
-from driver import (
+from camera_driver import (
     ColibriDriver,
     CameraStatus,
     CameraSettings,
@@ -44,7 +44,7 @@ class ColibriProxy:
     """
     
     DEFAULT_HOST = '0.0.0.0'
-    DEFAULT_PORT = 12345
+    DEFAULT_PORT = 5000
     
     def __init__(self, tty_device: str, host: str = DEFAULT_HOST, port: int = DEFAULT_PORT):
         self.tty_device = tty_device
@@ -411,7 +411,7 @@ class ColibriProxy:
         
         self.driver.set_pitch(ColibriProtocol.RATE_MIDDLE_VAL)
         self.driver.set_roll(ColibriProtocol.RATE_MIDDLE_VAL)
-        return {"status": "ok", "message": "Pitch and roll centered"}
+        return {"status": "ok", "message": "Pitch and roll rates set to neutral"}
     
     def _cmd_nuc(self, cmd: Dict) -> Dict:
         """Toggle NUC"""
@@ -604,7 +604,7 @@ def print_usage():
     print()
     print("Options:")
     print("  --host <ip>   - Listen address (default: 0.0.0.0)")
-    print("  --port <port> - Listen port (default: 12345)")
+    print("  --port <port> - Listen port (default: 5000)")
     print()
     print("Examples:")
     print("  python proxy.py /dev/ttyUSB0")
