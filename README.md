@@ -25,6 +25,13 @@ cd field
 ```bash
 cd home
 uv sync
+uv run python basic_ui.py
+```
+
+For headless control and a separate video window:
+
+```bash
+cd home
 uv run python angle_hold.py --host <FIELD_IP> --port 5000 --pitch 0 --pan 0
 ./show_rtp.sh                 # optional argument: UDP port, default 5010
 ```
