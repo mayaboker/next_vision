@@ -20,8 +20,8 @@ cd field
 ./stream_rtp.sh <HOME_IP>       # optional second argument: UDP port, default 5010
 ```
 
-The stream defaults to 1280x720 at 20 FPS. Override it with environment variables,
-for example `FPS=30 WIDTH=960 HEIGHT=540 ./stream_rtp.sh <HOME_IP>`.
+The stream defaults to 1280x720 at 24 FPS and 3 Mbps. Override it with environment
+variables, for example `FPS=12 BITRATE=2500000 ./stream_rtp.sh <HOME_IP>`.
 
 ## Home PC
 
@@ -30,6 +30,13 @@ cd home
 uv sync
 uv run python basic_ui.py
 ```
+
+The combined UI shows RTP video, the live Thrustmaster controller, pan/tilt
+targets and gains, RGB/IR sensor selection, palette, NUC, and closed-loop zoom
+to the nearest camera-supported horizontal field of view. Controller inputs are
+A1 yaw, inverted A2 pitch, button 4 zoom in, 9 zoom out, 7 NUC, 6 thermal
+polarity, and 1 RGB/IR. Buttons 5 and 8 are displayed for focus, which the
+current Colibri protocol does not expose.
 
 For headless control and a separate video window:
 

@@ -9,12 +9,13 @@ fi
 home_ip=$1
 port=${2:-5010}
 video_device=${VIDEO_DEVICE:-/dev/video0}
-fps=${FPS:-20}
+fps=${FPS:-24}
 width=${WIDTH:-1280}
 height=${HEIGHT:-720}
 threads=${VIDEO_THREADS:-4}
+bitrate=${BITRATE:-3000000}
 
-for value in "$fps" "$width" "$height" "$threads"; do
+for value in "$fps" "$width" "$height" "$threads" "$bitrate"; do
     [[ $value =~ ^[1-9][0-9]*$ ]] || { echo "Video settings must be positive integers" >&2; exit 2; }
 done
 ((fps >= 2)) || { echo "FPS must be at least 2" >&2; exit 2; }
@@ -26,7 +27,7 @@ exec gst-launch-1.0 -q --no-position \
     videoscale n-threads="$threads" ! video/x-raw,width="$width",height="$height" ! \
     videoconvert n-threads="$threads" ! video/x-raw,format=I420 ! \
     queue max-size-buffers=2 leaky=downstream ! \
-    mpph265enc rc-mode=cbr bps=4000000 gop="$fps" ! \
+    mpph265enc rc-mode=cbr bps="$bitrate" gop="$((fps / 2))" ! \
     h265parse ! \
     rtph265pay pt=96 mtu=1400 aggregate-mode=zero-latency config-interval=-1 ! \
     udpsink host="$home_ip" port="$port" sync=false async=false

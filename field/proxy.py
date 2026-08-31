@@ -102,6 +102,7 @@ class ColibriProxy:
             while self.running:
                 try:
                     client_socket, client_addr = self.server_socket.accept()
+                    client_socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
                     print(f"📥 Client connected: {client_addr}")
                     
                     with self.clients_lock:
