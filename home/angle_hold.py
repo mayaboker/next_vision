@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hold the Colibri gimbal at fixed pitch and pan angles."""
+"""Hold the Colibri gimbal at fixed tilt and pan target setpoints."""
 
 import argparse
 import json
@@ -16,9 +16,9 @@ INTEGRAL_LIMIT = 2047
 DT = 0.05
 
 # Verified directions for the current camera mount.
-PITCH_ACTUATOR_SIGN = -1
+TILT_ACTUATOR_SIGN = -1
 PAN_ACTUATOR_SIGN = -1
-INVERT_PITCH = False
+INVERT_TILT = False
 INVERT_PAN = True
 
 
@@ -125,21 +125,24 @@ def parse_args():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--host", required=True, help="Field proxy IP")
     parser.add_argument("--port", type=int, default=5000)
-    parser.add_argument("--pitch", type=float, default=0.0, help="Pitch setpoint in degrees")
-    parser.add_argument("--pan", type=float, default=0.0, help="Pan setpoint in degrees")
-    parser.add_argument("--kp", type=float, default=100.0)
-    parser.add_argument("--ki", type=float, default=0.01)
-    parser.add_argument("--kd", type=float, default=0.001)
+    parser.add_argument("--tilt-target", type=float, default=0.0, help="Tilt target setpoint in degrees")
+    parser.add_argument("--pan-target", type=float, default=0.0, help="Pan target setpoint in degrees")
+    parser.add_argument("--tilt-kp", type=float, default=100.0)
+    parser.add_argument("--tilt-ki", type=float, default=0.01)
+    parser.add_argument("--tilt-kd", type=float, default=0.001)
+    parser.add_argument("--pan-kp", type=float, default=100.0)
+    parser.add_argument("--pan-ki", type=float, default=0.01)
+    parser.add_argument("--pan-kd", type=float, default=0.001)
     parser.add_argument("--feedback-timeout", type=float, default=2.0)
     return parser.parse_args()
 
 
 def main():
     args = parse_args()
-    pitch_setpoint = clamp(args.pitch, -90.0, 90.0)
-    pan_setpoint = clamp(args.pan, -180.0, 180.0)
-    pitch_pid = PID(args.kp, args.ki, args.kd)
-    pan_pid = PID(args.kp, args.ki, args.kd)
+    tilt_target = clamp(args.tilt_target, -90.0, 90.0)
+    pan_target = clamp(args.pan_target, -180.0, 180.0)
+    tilt_pid = PID(args.tilt_kp, args.tilt_ki, args.tilt_kd)
+    pan_pid = PID(args.pan_kp, args.pan_ki, args.pan_kd)
 
     client = ProxyClient(args.host, args.port)
     print(f"Connected to field proxy at {args.host}:{args.port}")
@@ -165,18 +168,18 @@ def main():
             if status is None or now - status_time > args.feedback_timeout:
                 raise RuntimeError("camera feedback timed out")
 
-            pitch = float(status["total_pitch_deg"])
+            tilt = float(status["total_pitch_deg"])
             pan = float(status["total_roll_deg"])
-            if INVERT_PITCH:
-                pitch = -pitch
+            if INVERT_TILT:
+                tilt = -tilt
             if INVERT_PAN:
                 pan = -pan
 
-            pitch_output = pitch_pid.update(pitch_setpoint - pitch, dt)
-            pan_output = pan_pid.update(wrap_180(pan_setpoint - pan), dt)
+            tilt_output = tilt_pid.update(tilt_target - tilt, dt)
+            pan_output = pan_pid.update(wrap_180(pan_target - pan), dt)
             client.command(
                 "pitch",
-                value=rate_command(pitch_output, PITCH_ACTUATOR_SIGN, INVERT_PITCH),
+                value=rate_command(tilt_output, TILT_ACTUATOR_SIGN, INVERT_TILT),
             )
             client.command(
                 "roll",
@@ -185,8 +188,8 @@ def main():
 
             if now >= next_report:
                 print(
-                    f"pitch {pitch:7.2f} -> {pitch_setpoint:7.2f} deg | "
-                    f"pan {pan:7.2f} -> {pan_setpoint:7.2f} deg"
+                    f"tilt value {tilt:7.2f} target {tilt_target:7.2f} deg | "
+                    f"pan value {pan:7.2f} target {pan_target:7.2f} deg"
                 )
                 next_report = now + 1.0
     except KeyboardInterrupt:

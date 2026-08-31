@@ -1,6 +1,6 @@
 # Next Vision Minimal
 
-Minimal Colibri field proxy, RTP video sender, and headless angle-hold controller.
+Minimal Colibri field proxy, RTP video sender, and headless pan/tilt controller.
 
 ## Field card
 
@@ -20,6 +20,9 @@ cd field
 ./stream_rtp.sh <HOME_IP>       # optional second argument: UDP port, default 5010
 ```
 
+The stream defaults to 1280x720 at 20 FPS. Override it with environment variables,
+for example `FPS=30 WIDTH=960 HEIGHT=540 ./stream_rtp.sh <HOME_IP>`.
+
 ## Home PC
 
 ```bash
@@ -32,12 +35,14 @@ For headless control and a separate video window:
 
 ```bash
 cd home
-uv run python angle_hold.py --host <FIELD_IP> --port 5000 --pitch 0 --pan 0
+uv run python angle_hold.py --host <FIELD_IP> --port 5000 \
+  --tilt-target 0 --pan-target 0
 ./show_rtp.sh                 # optional argument: UDP port, default 5010
 ```
 
-`--pitch` accepts `-90..90` degrees and `--pan` accepts `-180..180` degrees.
-The controller receives angle feedback from the proxy and sends PID rate commands
+The tilt target accepts `-90..90` degrees and the pan target accepts `-180..180`
+degrees. Each axis has independent `Kp`, `Ki`, and `Kd` values in the UI. The
+controller receives pan/tilt feedback from the proxy and sends PID rate commands
 until `Ctrl+C`; shutdown sends neutral rates and stops field transmission.
 
 Control uses newline-delimited JSON over TCP `5000`. Video is one-way H.265/RTP

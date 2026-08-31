@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import signal
 import sys
+import time
 
 from PyQt6.QtCore import QProcess, Qt
 from PyQt6.QtGui import QCloseEvent, QImage, QPixmap
@@ -14,6 +15,7 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -28,7 +30,7 @@ from PyQt6.QtWidgets import (
 
 
 HERE = Path(__file__).resolve().parent
-MEASUREMENT = re.compile(r"pitch\s+([-\d.]+).*pan\s+([-\d.]+)")
+MEASUREMENT = re.compile(r"tilt value\s+([-\d.]+).*pan value\s+([-\d.]+)")
 
 
 class VideoView(QLabel):
@@ -63,10 +65,12 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Next Vision")
-        self.setMinimumSize(980, 640)
+        self.setMinimumSize(1040, 640)
         self.video_process = QProcess(self)
         self.control_process = QProcess(self)
         self.jpeg_buffer = bytearray()
+        self.video_frames = 0
+        self.video_fps_started = time.monotonic()
         self.stopping_control = False
         self._build_ui()
         self._wire_processes()
@@ -113,7 +117,7 @@ class MainWindow(QMainWindow):
 
         controls = QFrame()
         controls.setObjectName("panel")
-        controls.setFixedWidth(310)
+        controls.setFixedWidth(360)
         controls_layout = QVBoxLayout(controls)
         controls_layout.setContentsMargins(18, 18, 18, 18)
         controls_layout.setSpacing(14)
@@ -128,29 +132,48 @@ class MainWindow(QMainWindow):
         connection.addRow("Video port", self.video_port)
         controls_layout.addLayout(connection)
 
-        controls_layout.addWidget(self._section("ANGLE SETPOINT"))
-        angles = QFormLayout()
-        angles.setSpacing(9)
-        self.pitch = self._decimal(0.0, -90.0, 90.0, 1.0)
-        self.pan = self._decimal(0.0, -180.0, 180.0, 1.0)
-        angles.addRow("Pitch", self.pitch)
-        angles.addRow("Pan", self.pan)
-        controls_layout.addLayout(angles)
+        controls_layout.addWidget(self._section("TARGET SETPOINTS"))
+        targets = QGridLayout()
+        targets.setHorizontalSpacing(9)
+        targets.setVerticalSpacing(9)
+        targets.addWidget(self._field_header("Axis"), 0, 0)
+        targets.addWidget(self._field_header("Target"), 0, 1)
+        targets.addWidget(self._field_header("Value"), 0, 2)
+        self.tilt_target = self._decimal(0.0, -90.0, 90.0, 1.0)
+        self.pan_target = self._decimal(0.0, -180.0, 180.0, 1.0)
+        self.tilt_value = self._value_label()
+        self.pan_value = self._value_label()
+        targets.addWidget(QLabel("Tilt"), 1, 0)
+        targets.addWidget(self.tilt_target, 1, 1)
+        targets.addWidget(self.tilt_value, 1, 2)
+        targets.addWidget(QLabel("Pan"), 2, 0)
+        targets.addWidget(self.pan_target, 2, 1)
+        targets.addWidget(self.pan_value, 2, 2)
+        controls_layout.addLayout(targets)
 
         controls_layout.addWidget(self._section("PID GAINS"))
-        gains = QFormLayout()
-        gains.setSpacing(9)
-        self.kp = self._decimal(100.0, 0.0, 10000.0, 1.0, 3)
-        self.ki = self._decimal(0.01, 0.0, 1000.0, 0.01, 4)
-        self.kd = self._decimal(0.001, 0.0, 1000.0, 0.001, 4)
-        gains.addRow("Kp", self.kp)
-        gains.addRow("Ki", self.ki)
-        gains.addRow("Kd", self.kd)
+        gains = QGridLayout()
+        gains.setHorizontalSpacing(9)
+        gains.setVerticalSpacing(9)
+        gains.addWidget(self._field_header("Gain"), 0, 0)
+        gains.addWidget(self._field_header("Tilt"), 0, 1)
+        gains.addWidget(self._field_header("Pan"), 0, 2)
+        self.tilt_kp = self._decimal(100.0, 0.0, 10000.0, 1.0, 3)
+        self.tilt_ki = self._decimal(0.01, 0.0, 1000.0, 0.01, 4)
+        self.tilt_kd = self._decimal(0.001, 0.0, 1000.0, 0.001, 4)
+        self.pan_kp = self._decimal(100.0, 0.0, 10000.0, 1.0, 3)
+        self.pan_ki = self._decimal(0.01, 0.0, 1000.0, 0.01, 4)
+        self.pan_kd = self._decimal(0.001, 0.0, 1000.0, 0.001, 4)
+        for row, (name, tilt_gain, pan_gain) in enumerate(
+            (("Kp", self.tilt_kp, self.pan_kp),
+             ("Ki", self.tilt_ki, self.pan_ki),
+             ("Kd", self.tilt_kd, self.pan_kd)),
+            start=1,
+        ):
+            gains.addWidget(QLabel(name), row, 0)
+            gains.addWidget(tilt_gain, row, 1)
+            gains.addWidget(pan_gain, row, 2)
         controls_layout.addLayout(gains)
-
-        self.measured = QLabel("Pitch  --.--°     Pan  --.--°")
-        self.measured.setObjectName("readout")
-        controls_layout.addWidget(self.measured)
         controls_layout.addStretch()
 
         buttons = QHBoxLayout()
@@ -185,6 +208,19 @@ class MainWindow(QMainWindow):
         return label
 
     @staticmethod
+    def _field_header(text):
+        label = QLabel(text)
+        label.setObjectName("fieldHeader")
+        return label
+
+    @staticmethod
+    def _value_label():
+        label = QLabel("--.--°")
+        label.setObjectName("value")
+        label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        return label
+
+    @staticmethod
     def _integer(value, low, high):
         box = QSpinBox()
         box.setRange(low, high)
@@ -203,15 +239,20 @@ class MainWindow(QMainWindow):
     def start_video(self):
         self._stop_process(self.video_process)
         self.jpeg_buffer.clear()
+        self.video_frames = 0
+        self.video_fps_started = time.monotonic()
         port = self.video_port.value()
         self.video_state.setText(f"RTP  ·  UDP {port}")
         caps = "application/x-rtp,media=video,clock-rate=90000,encoding-name=H265,payload=96"
         args = [
             "-q", "udpsrc", f"port={port}", "buffer-size=4194304", f"caps={caps}", "!",
-            "rtpjitterbuffer", "latency=200", "do-lost=true", "!",
+            "rtpjitterbuffer", "latency=150", "drop-on-latency=true", "do-lost=true", "!",
             "rtph265depay", "!", "h265parse", "!", "avdec_h265", "!",
+            "videorate", "!", "video/x-raw,framerate=20/1", "!",
             "videoconvert", "!", "videoflip", "method=rotate-180", "!",
-            "jpegenc", "quality=88", "!", "fdsink", "fd=1",
+            "clocksync", "sync=true", "!",
+            "queue", "max-size-buffers=1", "leaky=downstream", "!",
+            "jpegenc", "quality=82", "!", "fdsink", "fd=1", "sync=false",
         ]
         self.video_process.start("gst-launch-1.0", args)
 
@@ -229,7 +270,14 @@ class MainWindow(QMainWindow):
             image = QImage.fromData(latest, "JPEG")
             if not image.isNull():
                 self.video_view.set_image(image)
-                self.video_state.setText(f"LIVE  ·  UDP {self.video_port.value()}")
+                self.video_frames += 1
+                elapsed = time.monotonic() - self.video_fps_started
+                if elapsed >= 1.0:
+                    self.video_state.setText(
+                        f"LIVE  ·  {self.video_frames / elapsed:.1f} FPS  ·  UDP {self.video_port.value()}"
+                    )
+                    self.video_frames = 0
+                    self.video_fps_started = time.monotonic()
 
     def start_control(self):
         self.stop_control()
@@ -238,8 +286,14 @@ class MainWindow(QMainWindow):
         args = [
             "-u", str(HERE / "angle_hold.py"),
             "--host", self.host.text().strip(), "--port", str(self.port.value()),
-            "--pitch", str(self.pitch.value()), "--pan", str(self.pan.value()),
-            "--kp", str(self.kp.value()), "--ki", str(self.ki.value()), "--kd", str(self.kd.value()),
+            "--tilt-target", str(self.tilt_target.value()),
+            "--pan-target", str(self.pan_target.value()),
+            "--tilt-kp", str(self.tilt_kp.value()),
+            "--tilt-ki", str(self.tilt_ki.value()),
+            "--tilt-kd", str(self.tilt_kd.value()),
+            "--pan-kp", str(self.pan_kp.value()),
+            "--pan-ki", str(self.pan_ki.value()),
+            "--pan-kd", str(self.pan_kd.value()),
         ]
         self.control_process.start(sys.executable, args)
 
@@ -264,9 +318,8 @@ class MainWindow(QMainWindow):
                 self._set_status("HOLDING", "live")
             match = MEASUREMENT.search(line)
             if match:
-                self.measured.setText(
-                    f"Pitch  {float(match.group(1)):6.2f}°     Pan  {float(match.group(2)):6.2f}°"
-                )
+                self.tilt_value.setText(f"{float(match.group(1)):.2f}°")
+                self.pan_value.setText(f"{float(match.group(2)):.2f}°")
 
     def _control_finished(self, exit_code, _status):
         if not self.stopping_control and exit_code:
@@ -308,7 +361,8 @@ QFrame#panel { background: #1b1f1d; border: 1px solid #343a37; border-radius: 8p
 QLabel#video { background: #090b0a; border: 0; border-radius: 5px; color: #79827e; font-size: 15px; }
 QLabel#section { color: #84d7aa; font-size: 11px; font-weight: 700; padding-top: 5px; }
 QLabel#muted { color: #8e9993; font-size: 11px; }
-QLabel#readout { background: #111412; border: 1px solid #343a37; border-radius: 5px; padding: 10px; color: #d9e2dd; }
+QLabel#fieldHeader { color: #8e9993; font-size: 11px; }
+QLabel#value { background: #111412; border: 1px solid #343a37; border-radius: 5px; padding: 7px; color: #d9e2dd; }
 QLineEdit, QSpinBox, QDoubleSpinBox { background: #101311; border: 1px solid #3b433f; border-radius: 5px; padding: 7px; color: #f2f5f3; selection-background-color: #347b56; }
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #55c789; }
 QPushButton { min-height: 34px; border-radius: 5px; padding: 0 11px; font-weight: 600; }
