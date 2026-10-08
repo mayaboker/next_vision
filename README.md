@@ -20,7 +20,7 @@ cd field
 ./stream_rtp.sh <HOME_IP>       # optional second argument: UDP port, default 5010
 ```
 
-The stream defaults to 1280x720 at 24 FPS and 3 Mbps. Override it with environment
+The stream defaults to the decoder's native 720x480 at 12 FPS and 3 Mbps. Override it with environment
 variables, for example `FPS=12 BITRATE=2500000 ./stream_rtp.sh <HOME_IP>`.
 
 ## Home PC

@@ -9,9 +9,9 @@ fi
 home_ip=$1
 port=${2:-5010}
 video_device=${VIDEO_DEVICE:-/dev/video0}
-fps=${FPS:-24}
-width=${WIDTH:-1280}
-height=${HEIGHT:-720}
+fps=${FPS:-12}
+width=${WIDTH:-720}
+height=${HEIGHT:-480}
 threads=${VIDEO_THREADS:-4}
 bitrate=${BITRATE:-3000000}
 
@@ -21,7 +21,7 @@ done
 ((fps >= 2)) || { echo "FPS must be at least 2" >&2; exit 2; }
 
 exec gst-launch-1.0 -q --no-position \
-    v4l2src device="$video_device" do-timestamp=true ! \
+    v4l2src device="$video_device" io-mode=4 do-timestamp=true ! \
     queue max-size-buffers=2 leaky=downstream ! \
     videorate drop-only=true ! video/x-raw,framerate="$fps/1" ! \
     videoscale n-threads="$threads" ! video/x-raw,width="$width",height="$height" ! \
