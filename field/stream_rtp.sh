@@ -26,6 +26,16 @@ for value in "$fps" "$width" "$height" "$threads" "$bitrate"; do
 done
 ((fps >= 2)) || { echo "FPS must be at least 2" >&2; exit 2; }
 
+if [[ "$video_device" == "/dev/video11" ]]; then
+    hdmirx_status=$(cat /sys/class/hdmirx/hdmirx/status 2>/dev/null || true)
+    power_present=$(v4l2-ctl -d "$video_device" --get-ctrl=power_present 2>/dev/null | awk -F': ' '{print $2}')
+    if [[ "$hdmirx_status" != "connected" || "$power_present" != "1" ]]; then
+        echo "DragonEye HDMI input is unavailable (status=$hdmirx_status power_present=${power_present:-0})" >&2
+        echo "Connect and power the camera at the board HDMI-IN, then rerun this command." >&2
+        exit 1
+    fi
+fi
+
 exec gst-launch-1.0 -q --no-position \
     v4l2src device="$video_device" io-mode=4 do-timestamp=true ! \
     queue max-size-buffers=2 leaky=downstream ! \

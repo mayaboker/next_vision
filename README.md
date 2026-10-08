@@ -41,8 +41,9 @@ Check the receiver before starting the sender:
 ```
 
 For a DragonEye source, this must report `hdmirx_status: connected`,
-`power_present: 1`, and valid HDMI timings. Set `VIDEO_DEVICE=/dev/video0`
-only when using a CVBS/ADV7282 source.
+`power_present: 1`, and valid HDMI timings. The camera requires its own
+15--32 V supply; the board HDMI connector is an input, not a camera power
+source. Set `VIDEO_DEVICE=/dev/video0` only when using a CVBS/ADV7282 source.
 
 ## Home PC
 
