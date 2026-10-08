@@ -8,10 +8,16 @@ fi
 
 home_ip=$1
 port=${2:-5010}
-video_device=${VIDEO_DEVICE:-/dev/video0}
+if [[ -n "${VIDEO_DEVICE:-}" ]]; then
+    video_device=$VIDEO_DEVICE
+elif [[ -e /dev/video11 ]] && [[ "$(cat /sys/class/video4linux/video11/name 2>/dev/null || true)" == "stream_hdmirx" ]]; then
+    video_device=/dev/video11
+else
+    video_device=/dev/video0
+fi
 fps=${FPS:-12}
-width=${WIDTH:-720}
-height=${HEIGHT:-480}
+width=${WIDTH:-1280}
+height=${HEIGHT:-720}
 threads=${VIDEO_THREADS:-4}
 bitrate=${BITRATE:-3000000}
 

@@ -4,8 +4,19 @@ Minimal Colibri field proxy, RTP video sender, and headless pan/tilt controller.
 
 ## Field card
 
-Requires Python 3.10+, `uv`, `/dev/ttyS0`, `/dev/video0`, and GStreamer with the
-Rockchip `mpph265enc` plugin.
+Requires Python 3.10+, `uv`, `/dev/ttyS0`, and GStreamer with the Rockchip
+`mpph265enc` plugin. DragonEye cameras use the board's HDMI receiver
+(`/dev/video11`, `rk_hdmirx`); `/dev/video0` is the separate analog ADV7282 input.
+
+On the supplied Ubuntu image, install the userspace prerequisites once:
+
+```bash
+sudo apt install v4l-utils gstreamer1.0-tools gstreamer1.0-plugins-base \
+  gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
+```
+
+The HDMI receiver and `adv7180` decoder are kernel drivers supplied by the board
+image; they are not Python packages and should not be installed with `uv`.
 
 ```bash
 cd field
@@ -20,8 +31,18 @@ cd field
 ./stream_rtp.sh <HOME_IP>       # optional second argument: UDP port, default 5010
 ```
 
-The stream defaults to the decoder's native 720x480 at 12 FPS and 3 Mbps. Override it with environment
+The stream defaults to 1280x720 at 12 FPS and 3 Mbps. Override it with environment
 variables, for example `FPS=12 BITRATE=2500000 ./stream_rtp.sh <HOME_IP>`.
+
+Check the receiver before starting the sender:
+
+```bash
+./check_video.sh
+```
+
+For a DragonEye source, this must report `hdmirx_status: connected`,
+`power_present: 1`, and valid HDMI timings. Set `VIDEO_DEVICE=/dev/video0`
+only when using a CVBS/ADV7282 source.
 
 ## Home PC
 
