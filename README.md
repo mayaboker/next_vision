@@ -2,11 +2,21 @@
 
 Minimal Colibri field proxy, RTP video sender, and headless pan/tilt controller.
 
+For the exact commands used on the latest Ubuntu/LT6911UXC card, see
+[SETUP.md](SETUP.md). Older hardware notes remain in `field/URANUS_SETUP.md`.
+
 ## Field card
 
 Requires Python 3.10+, `uv`, `/dev/ttyS0`, and GStreamer with the Rockchip
-`mpph265enc` plugin. DragonEye cameras use the board's HDMI receiver
-(`/dev/video11`, `rk_hdmirx`); `/dev/video0` is the separate analog ADV7282 input.
+`mpph265enc` plugin. The capture device defaults to `/dev/video0`.
+Use `VIDEO_DEVICE` to override it. Device numbering does not identify the input:
+the verified working card exposes `rk_hdmirx`, while inspected replacements
+expose an ADV7282-M-to-MIPI path.
+
+For a new Uranus card, follow [field/URANUS_SETUP.md](field/URANUS_SETUP.md).
+It includes the verified HDMI device tree, backup/rollback, installation, and
+video/UART acceptance checks. Video and camera control were both verified on
+the Buildroot replacement on 2026-10-14.
 
 On the supplied Ubuntu image, install the userspace prerequisites once:
 
@@ -15,8 +25,10 @@ sudo apt install v4l-utils gstreamer1.0-tools gstreamer1.0-plugins-base \
   gstreamer1.0-plugins-good gstreamer1.0-plugins-bad gstreamer1.0-libav
 ```
 
-The HDMI receiver and `adv7180` decoder are kernel drivers supplied by the board
-image; they are not Python packages and should not be installed with `uv`.
+The video receiver and camera/bridge driver are supplied by the board kernel and
+device tree. They must match the camera connection; `uv` installs only Python
+dependencies. Some replacement images bind an ADV7282-M decoder through the
+`adv7180` driver; that is not the capture path of the verified working setup.
 
 ```bash
 cd field
@@ -31,8 +43,12 @@ cd field
 ./stream_rtp.sh <HOME_IP>       # optional second argument: UDP port, default 5010
 ```
 
-The stream defaults to 1280x720 at 12 FPS and 3 Mbps. Override it with environment
+The stream defaults to 1280x720 at 25 FPS and 3 Mbps. Override it with environment
 variables, for example `FPS=12 BITRATE=2500000 ./stream_rtp.sh <HOME_IP>`.
+Newer LT6911UXC cards need explicit native-size NV12 `SOURCE_CAPS`; see the
+Uranus setup guide. Optional `SOURCE_MIN_BUFFERS` sets the vendor capture pool.
+The home receiver displays native frames with a 250 ms jitter buffer; it does
+not duplicate frames to inflate the displayed FPS.
 
 Check the receiver before starting the sender:
 
@@ -40,10 +56,12 @@ Check the receiver before starting the sender:
 ./check_video.sh
 ```
 
-For a DragonEye source, this must report `hdmirx_status: connected`,
-`power_present: 1`, and valid HDMI timings. The camera requires its own
-15--32 V supply; the board HDMI connector is an input, not a camera power
-source. Set `VIDEO_DEVICE=/dev/video0` only when using a CVBS/ADV7282 source.
+Check the actual capture driver and its input status. A MIPI media graph or a
+working test pattern does not establish valid live camera frames. Verify a direct
+capture before troubleshooting RTP; use HDMI timing checks only for `rk_hdmirx`.
+
+See [field/VIDEO_SETUP.md](field/VIDEO_SETUP.md) for permissions, direct-capture
+checks, and the current verification results.
 
 ## Home PC
 

@@ -8,14 +8,15 @@ fi
 
 home_ip=$1
 port=${2:-5010}
-if [[ -n "${VIDEO_DEVICE:-}" ]]; then
-    video_device=$VIDEO_DEVICE
-elif [[ -e /dev/video11 ]] && [[ "$(cat /sys/class/video4linux/video11/name 2>/dev/null || true)" == "stream_hdmirx" ]]; then
-    video_device=/dev/video11
-else
-    video_device=/dev/video0
+video_device=${VIDEO_DEVICE:-/dev/video0}
+source_caps=${SOURCE_CAPS:-video/x-raw}
+encoder_format=${ENCODER_FORMAT:-I420}
+source_args=()
+if [[ -n ${SOURCE_MIN_BUFFERS:-} ]]; then
+    [[ $SOURCE_MIN_BUFFERS =~ ^[1-9][0-9]*$ ]] || { echo "SOURCE_MIN_BUFFERS must be a positive integer" >&2; exit 2; }
+    source_args+=("min-buffers=$SOURCE_MIN_BUFFERS")
 fi
-fps=${FPS:-12}
+fps=${FPS:-25}
 width=${WIDTH:-1280}
 height=${HEIGHT:-720}
 threads=${VIDEO_THREADS:-4}
@@ -26,24 +27,15 @@ for value in "$fps" "$width" "$height" "$threads" "$bitrate"; do
 done
 ((fps >= 2)) || { echo "FPS must be at least 2" >&2; exit 2; }
 
-if [[ "$video_device" == "/dev/video11" ]]; then
-    hdmirx_status=$(cat /sys/class/hdmirx/hdmirx/status 2>/dev/null || true)
-    power_present=$(v4l2-ctl -d "$video_device" --get-ctrl=power_present 2>/dev/null | awk -F': ' '{print $2}')
-    if [[ "$hdmirx_status" != "connected" || "$power_present" != "1" ]]; then
-        echo "DragonEye HDMI input is unavailable (status=$hdmirx_status power_present=${power_present:-0})" >&2
-        echo "Connect and power the camera at the board HDMI-IN, then rerun this command." >&2
-        exit 1
-    fi
-fi
-
 exec gst-launch-1.0 -q --no-position \
-    v4l2src device="$video_device" io-mode=4 do-timestamp=true ! \
+    v4l2src device="$video_device" io-mode=4 do-timestamp=true "${source_args[@]}" ! \
+    "$source_caps" ! \
     queue max-size-buffers=2 leaky=downstream ! \
     videorate drop-only=true ! video/x-raw,framerate="$fps/1" ! \
     videoscale n-threads="$threads" ! video/x-raw,width="$width",height="$height" ! \
-    videoconvert n-threads="$threads" ! video/x-raw,format=I420 ! \
+    videoconvert n-threads="$threads" ! video/x-raw,format="$encoder_format" ! \
     queue max-size-buffers=2 leaky=downstream ! \
-    mpph265enc rc-mode=cbr bps="$bitrate" gop="$((fps / 2))" ! \
+    mpph265enc rc-mode=cbr bps="$bitrate" gop="$((fps / 2))" header-mode=each-idr ! \
     h265parse ! \
     rtph265pay pt=96 mtu=1400 aggregate-mode=zero-latency config-interval=-1 ! \
     udpsink host="$home_ip" port="$port" sync=false async=false

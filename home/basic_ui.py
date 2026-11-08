@@ -715,10 +715,9 @@ class MainWindow(QMainWindow):
         caps = "application/x-rtp,media=video,clock-rate=90000,encoding-name=H265,payload=96"
         args = [
             "-q", "udpsrc", f"port={port}", "buffer-size=4194304", f"caps={caps}", "!",
-            "rtpjitterbuffer", "latency=150", "drop-on-latency=true", "do-lost=true", "!",
+            "rtpjitterbuffer", "latency=250", "drop-on-latency=true", "do-lost=true", "!",
             "rtph265depay", "!", "h265parse", "!",
             "avdec_h265", "output-corrupt=false", "discard-corrupted-frames=true", "!",
-            "videorate", "!", "video/x-raw,framerate=24/1", "!",
             "videoconvert", "!", "videoflip", "method=rotate-180", "!",
             "clocksync", "sync=true", "!",
             "queue", "max-size-buffers=1", "leaky=downstream", "!",
